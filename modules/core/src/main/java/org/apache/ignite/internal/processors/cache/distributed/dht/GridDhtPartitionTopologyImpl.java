@@ -1279,6 +1279,17 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
             node2part = partMap;
 
+            if ("default".equals(grp.cacheOrGroupName())) {
+                for (Map.Entry<UUID, GridDhtPartitionMap> e : node2part.entrySet()) {
+                    GridDhtPartitionMap parts = e.getValue();
+
+                    String msg = "update full " + parts.nodeId() + " " + exchangeResVer;
+
+                    for (Integer p : parts.keySet())
+                        TestDebugLog.addPartMessage(p, parts.get(p), msg);
+                }
+            }
+
             if (readyTopVer.initialized() && readyTopVer.compareTo(diffFromAffinityVer) >= 0) {
                 AffinityAssignment affAssignment = grp.affinity().readyAffinity(readyTopVer);
 
@@ -1306,6 +1317,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 }
 
                 diffFromAffinityVer = readyTopVer;
+
+                debugDiff("updateFull");
             }
 
             boolean changed = false;
@@ -1538,6 +1551,13 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
             node2part.put(parts.nodeId(), parts);
 
+            if ("default".equals(grp.cacheOrGroupName())) {
+                String msg = "update single " + parts.nodeId() + " " + exchId;
+
+                for (Integer p : parts.keySet())
+                    TestDebugLog.addPartMessage(p, parts.get(p), msg);
+            }
+
             // During exchange calculate diff after all messages are received and affinity initialized.
             if (exchId == null) {
                 if (readyTopVer.initialized() && readyTopVer.compareTo(diffFromAffinityVer) >= 0) {
@@ -1582,6 +1602,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                     }
 
                     diffFromAffinityVer = readyTopVer;
+
+                    debugDiff("updateSingle");
                 }
             }
 
@@ -1699,9 +1721,28 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                     }
                 }
             }
+
+
         }
 
         diffFromAffinityVer = affAssignment.topologyVersion();
+
+        debugDiff("rebuildDiff");
+    }
+
+    private void debugDiff(String msg) {
+        if ("default".equals(grp.cacheOrGroupName())) {
+            if (F.isEmpty(diffFromAffinity)) {
+                TestDebugLog.addMessage("Update diff, empty " + msg + " " + diffFromAffinityVer);
+            }
+            else {
+                TestDebugLog.addMessage("Update diff " + msg + " " + diffFromAffinityVer);
+
+                for (Map.Entry<Integer, Set<UUID>> e : diffFromAffinity.entrySet()) {
+                    TestDebugLog.addPartMessage(e.getKey(), e.getValue(), msg);
+                }
+            }
+        }
     }
 
     /** {@inheritDoc} */
@@ -2028,6 +2069,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
             }
         }
 
+        boolean diff = false;
+
         if (node2part != null) {
             UUID locNodeId = ctx.localNodeId();
 
@@ -2053,13 +2096,19 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 if (!assignment.getIds(p).contains(ctx.localNodeId())) {
                     Set<UUID> diffIds = diffFromAffinity.get(p);
 
-                    if (diffIds == null)
+                    if (diffIds == null) {
+                        diff = true;
+
                         diffFromAffinity.put(p, diffIds = U.newHashSet(3));
+                    }
 
                     diffIds.add(ctx.localNodeId());
                 }
             }
         }
+
+        if (diff)
+            debugDiff("updateLocal");
 
         return updateSeq;
     }
