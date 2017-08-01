@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cache.PartitionLossPolicy;
 import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.events.DiscoveryEvent;
@@ -350,6 +351,9 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
                             boolean owned = locPart.own();
 
+                            if (grp.cacheOrGroupName().equals("default"))
+                                TestDebugLog.addPartMessage(p, "own start", "owned");
+
                             assert owned : "Failed to own partition for oldest node [grp=" + grp.cacheOrGroupName() +
                                 ", part=" + locPart + ']';
 
@@ -618,6 +622,9 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
                                 assert owned : "Failed to own partition [grp=" + grp.cacheOrGroupName() + ", locPart=" +
                                     locPart + ']';
+
+                                if (grp.cacheOrGroupName().equals("default"))
+                                    TestDebugLog.addPartMessage(p, "own after", "owned");
 
                                 updateSeq = updateLocal(p, locPart.state(), updateSeq, topVer);
 
@@ -1737,6 +1744,9 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                     GridDhtLocalPartition locPart = localPartition(part, resTopVer, false);
 
                     if (locPart != null) {
+                        if (grp.cacheOrGroupName().equals("default"))
+                            TestDebugLog.addPartMessage(locPart.id(), "detect loss", "owned");
+
                         boolean marked = plc == PartitionLossPolicy.IGNORE ? locPart.own() : locPart.markLost();
 
                         if (marked)
@@ -1793,6 +1803,9 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
                     if (locPart != null && locPart.state() == LOST) {
                         boolean marked = locPart.own();
+
+                        if (grp.cacheOrGroupName().equals("default"))
+                            TestDebugLog.addPartMessage(locPart.id(), "reset lost", "owned");
 
                         if (marked)
                             updateLocal(locPart.id(), locPart.state(), updSeq, resTopVer);

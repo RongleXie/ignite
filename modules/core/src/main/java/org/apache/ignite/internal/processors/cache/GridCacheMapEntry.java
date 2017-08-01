@@ -32,6 +32,7 @@ import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cache.eviction.EvictableEntry;
 import org.apache.ignite.internal.pagemem.wal.StorageException;
 import org.apache.ignite.internal.pagemem.wal.record.DataEntry;
@@ -882,6 +883,8 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
         @Nullable Long updateCntr
     ) throws IgniteCheckedException, GridCacheEntryRemovedException {
         CacheObject old;
+
+        TestDebugLog.addEntryMessage(key.value(null, false), val.value(cctx.cacheObjectContext(), false), "innerSet");
 
         boolean valid = valid(tx != null ? tx.topologyVersion() : topVer);
 
@@ -2523,6 +2526,8 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
     ) throws IgniteCheckedException, GridCacheEntryRemovedException {
         ensureFreeSpace();
 
+        TestDebugLog.addEntryMessage(key.value(null, false), val.value(cctx.cacheObjectContext(), false), "initialVal");
+
         synchronized (this) {
             checkObsolete();
 
@@ -3217,6 +3222,8 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
      */
     protected void removeValue() throws IgniteCheckedException {
         assert Thread.holdsLock(this);
+
+        TestDebugLog.addEntryMessage(key.value(null, false), val != null ? val.value(cctx.cacheObjectContext(), false) : null, "remove value");
 
         cctx.offheap().remove(cctx, key, partition(), localPartition());
     }

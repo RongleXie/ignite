@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.cluster.ClusterTopologyException;
 import org.apache.ignite.internal.IgniteInternalFuture;
@@ -655,6 +656,8 @@ public class GridNearOptimisticTxPrepareFuture extends GridNearOptimisticTxPrepa
 
             return null;
         }
+
+        TestDebugLog.addEntryMessage(entry.key().value(null, false), U.nodeIds(nodes), "near mapped");
 
         txMapping.addMapping(nodes);
 

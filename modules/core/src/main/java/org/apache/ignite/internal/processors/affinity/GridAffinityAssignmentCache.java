@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cache.affinity.AffinityCentralizedFunction;
 import org.apache.ignite.cache.affinity.AffinityFunction;
 import org.apache.ignite.cluster.ClusterNode;
@@ -201,6 +202,11 @@ public class GridAffinityAssignmentCache {
             }
         }
 
+        if ("default".equals(cacheOrGrpName)) {
+            for (int p = 0; p < affAssignment.size(); p++)
+                TestDebugLog.addPartMessage(p, U.nodeIds(assignment.get(p)), "aff new init " + topVer);
+        }
+
         onHistoryAdded(assignment);
     }
 
@@ -292,6 +298,11 @@ public class GridAffinityAssignmentCache {
         else
             assignment = aff.assignPartitions(new GridAffinityFunctionContextImpl(sorted, prevAssignment, discoEvt,
                 topVer, backups));
+
+        if ("default".equals(cacheOrGrpName)) {
+            for (int p = 0; p < assignment.size(); p++)
+                TestDebugLog.addPartMessage(p, U.nodeIds(assignment.get(p)), "aff new calc " + topVer);
+        }
 
         assert assignment != null;
 

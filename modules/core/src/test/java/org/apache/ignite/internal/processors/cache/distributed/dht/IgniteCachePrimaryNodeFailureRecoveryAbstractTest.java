@@ -27,6 +27,7 @@ import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteIllegalStateException;
 import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.IgniteTransactions;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cache.CacheAtomicityMode;
 import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.affinity.Affinity;
@@ -413,6 +414,8 @@ public abstract class IgniteCachePrimaryNodeFailureRecoveryAbstractTest extends 
 
         checkKey(key1, rollback ? null : key1Nodes);
         checkKey(key2, rollback ? null : key2Nodes);
+
+        TestDebugLog.clear();
     }
 
     /**
@@ -443,8 +446,6 @@ public abstract class IgniteCachePrimaryNodeFailureRecoveryAbstractTest extends 
                     found = true;
 
                     ignite.cache(DEFAULT_CACHE_NAME);
-
-                    assertEquals("Unexpected value for: " + ignite.name(), key, key);
                 }
                 catch (IgniteIllegalStateException ignore) {
                     // No-op.
@@ -456,7 +457,19 @@ public abstract class IgniteCachePrimaryNodeFailureRecoveryAbstractTest extends 
             for (Ignite ignite : G.allGrids()) {
                 IgniteCache<Integer, Integer> cache = ignite.cache(DEFAULT_CACHE_NAME);
 
-                assertEquals("Unexpected value for: " + ignite.name(), key, cache.get(key));
+                TestDebugLog.addEntryMessage(key, ignite.name(), "start get");
+
+                Object v = cache.get(key);
+
+                if (!key.equals(v)) {
+                    TestDebugLog.addEntryMessage(key, v, "invalid value " + ignite.name());
+
+                    TestDebugLog.printKeyAndPartMessages(false, key, ignite.affinity(DEFAULT_CACHE_NAME).partition(key));
+
+                    System.exit(1);
+                }
+
+                //assertEquals("Unexpected value for: " + ignite.name(), key, cache.get(key));
             }
         }
     }

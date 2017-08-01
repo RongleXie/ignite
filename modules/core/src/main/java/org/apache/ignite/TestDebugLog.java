@@ -161,6 +161,58 @@ public class TestDebugLog {
         }
     }
 
+    public static void printKeyAndPartMessages(boolean file, Object key, Integer part) {
+        List<Object> msgs0;
+
+        synchronized (msgs) {
+            msgs0 = new ArrayList<>(msgs);
+
+            msgs.clear();
+        }
+
+        if (file) {
+            try {
+                FileOutputStream out = new FileOutputStream("test_debug.log");
+
+                PrintWriter w = new PrintWriter(out);
+
+                for (Object msg : msgs0) {
+                    if (msg instanceof PartMessage) {
+                        if (((PartMessage) msg).p != part)
+                            continue;
+                    }
+                    if (msg instanceof EntryMessage) {
+                        if (!((EntryMessage) msg).key.equals(key))
+                            continue;
+                    }
+
+                    w.println(msg.toString());
+                }
+
+                w.close();
+
+                out.close();
+            }
+            catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        else {
+            for (Object msg : msgs0) {
+                if (msg instanceof PartMessage) {
+                    if (((PartMessage) msg).p != part)
+                        continue;
+                }
+                if (msg instanceof EntryMessage) {
+                    if (!((EntryMessage) msg).key.equals(key))
+                        continue;
+                }
+
+                System.out.println(msg.toString());
+            }
+        }
+    }
+
     public static void printKeyMessages(boolean file, Object key) {
         List<Object> msgs0;
 

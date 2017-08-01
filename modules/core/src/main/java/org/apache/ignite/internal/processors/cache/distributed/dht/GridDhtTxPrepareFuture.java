@@ -35,6 +35,7 @@ import javax.cache.processor.EntryProcessor;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteInterruptedException;
 import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.TestDebugLog;
 import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.internal.IgniteDiagnosticAware;
 import org.apache.ignite.internal.IgniteDiagnosticPrepareContext;
@@ -1511,6 +1512,8 @@ public final class GridDhtTxPrepareFuture extends GridCacheCompoundFuture<Ignite
                 List<ClusterNode> dhtNodes = dht.topology().nodes(cached.partition(), tx.topologyVersion());
 
                 assert dhtNodes.size() > 0 && dhtNodes.get(0).id().equals(cctx.localNodeId()) : dhtNodes;
+
+                TestDebugLog.addEntryMessage(cached.key().value(null, false), U.nodeIds(dhtNodes), "dht mapped");
 
                 if (log.isDebugEnabled())
                     log.debug("Mapping entry to DHT nodes [nodes=" + U.toShortString(dhtNodes) +
