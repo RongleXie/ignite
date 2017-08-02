@@ -2091,6 +2091,9 @@ public abstract class GridCacheMapEntry extends GridMetadataAwareAdapter impleme
                     long expireTime = expireTimeExtras();
 
                     if (expireTime > 0 && (expireTime - U.currentTimeMillis() <= 0)) {
+                        if (obsoleteVer == null)
+                            obsoleteVer = nextVersion();
+
                         if (onExpired(this.val, obsoleteVer)) {
                             if (cctx.deferredDelete()) {
                                 deferred = true;

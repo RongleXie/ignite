@@ -105,7 +105,9 @@ public interface GridDhtPartitionTopology {
      * @param affReady Affinity ready flag.
      * @throws IgniteCheckedException If failed.
      */
-    public void beforeExchange(GridDhtPartitionsExchangeFuture exchFut, boolean affReady)
+    public void beforeExchange(GridDhtPartitionsExchangeFuture exchFut,
+        boolean affReady,
+        boolean updateMoving)
         throws IgniteCheckedException;
 
     /**
@@ -209,7 +211,9 @@ public interface GridDhtPartitionTopology {
      * @param p Partition ID.
      * @param affAssignment Assignments.
      * @param affNodes Node assigned for given partition by affinity.
-     * @return Collection of all nodes responsible for this partition with primary node being first.
+     * @return Collection of all nodes responsible for this partition with primary node being first. The first N
+     *      elements of this collection (with N being 1 + backups) are actual DHT affinity nodes, other nodes
+     *      are current additional owners of the partition after topology change.
      */
     @Nullable public List<ClusterNode> nodes(int p, AffinityAssignment affAssignment, List<ClusterNode> affNodes);
 
