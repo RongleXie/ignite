@@ -140,28 +140,28 @@ public abstract class IgniteCachePrimaryNodeFailureRecoveryAbstractTest extends 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryNodeFailureRecovery1() throws Exception {
+    public void _testPessimisticPrimaryNodeFailureRecovery1() throws Exception {
         primaryNodeFailure(false, false, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryNodeFailureRecovery2() throws Exception {
+    public void _testPessimisticPrimaryNodeFailureRecovery2() throws Exception {
         primaryNodeFailure(true, false, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryNodeFailureRollback1() throws Exception {
+    public void _testPessimisticPrimaryNodeFailureRollback1() throws Exception {
         primaryNodeFailure(false, true, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryNodeFailureRollback2() throws Exception {
+    public void _testPessimisticPrimaryNodeFailureRollback2() throws Exception {
         primaryNodeFailure(true, true, false);
     }
 
@@ -293,28 +293,28 @@ public abstract class IgniteCachePrimaryNodeFailureRecoveryAbstractTest extends 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryAndOriginatingNodeFailureRecovery1() throws Exception {
+    public void _testPessimisticPrimaryAndOriginatingNodeFailureRecovery1() throws Exception {
         primaryAndOriginatingNodeFailure(false, false, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryAndOriginatingNodeFailureRecovery2() throws Exception {
+    public void _testPessimisticPrimaryAndOriginatingNodeFailureRecovery2() throws Exception {
         primaryAndOriginatingNodeFailure(true, false, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryAndOriginatingNodeFailureRollback1() throws Exception {
+    public void _testPessimisticPrimaryAndOriginatingNodeFailureRollback1() throws Exception {
         primaryAndOriginatingNodeFailure(false, true, false);
     }
 
     /**
      * @throws Exception If failed.
      */
-    public void testPessimisticPrimaryAndOriginatingNodeFailureRollback2() throws Exception {
+    public void _testPessimisticPrimaryAndOriginatingNodeFailureRollback2() throws Exception {
         primaryAndOriginatingNodeFailure(true, true, false);
     }
 

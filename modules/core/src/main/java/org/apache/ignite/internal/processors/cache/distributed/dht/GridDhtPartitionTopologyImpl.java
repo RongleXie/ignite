@@ -1283,6 +1283,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 for (Map.Entry<UUID, GridDhtPartitionMap> e : node2part.entrySet()) {
                     GridDhtPartitionMap parts = e.getValue();
 
+                    assert parts.nodeId().equals(e.getKey());
+
                     String msg = "update full " + parts.nodeId() + " " + exchangeResVer;
 
                     for (Integer p : parts.keySet())
@@ -1298,6 +1300,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                         int p = e0.getKey();
 
                         Set<UUID> diffIds = diffFromAffinity.get(p);
+
+                        TestDebugLog.addPartMessage(p, affAssignment.getIds(p), "check diff updateFull " + e0.getValue() + " " + e.getKey());
 
                         if ((e0.getValue() == MOVING || e0.getValue() == OWNING || e0.getValue() == RENTING) &&
                             !affAssignment.getIds(p).contains(e.getKey())) {
@@ -1318,7 +1322,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
                 diffFromAffinityVer = readyTopVer;
 
-                debugDiff("updateFull");
+                debugDiff("updateFull " + exchangeResVer + " " + readyTopVer);
             }
 
             boolean changed = false;

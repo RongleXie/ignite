@@ -73,7 +73,12 @@ public abstract class IgniteCacheAbstractTest extends GridCommonAbstractTest {
 
         assert cnt >= 1 : "At least one grid must be started";
 
-        startGridsMultiThreaded(cnt);
+        //startGridsMultiThreaded(cnt);
+
+        startGrid(0);
+        startGrid(3);
+        startGrid(2);
+        startGrid(1);
 
         awaitPartitionMapExchange();
     }
