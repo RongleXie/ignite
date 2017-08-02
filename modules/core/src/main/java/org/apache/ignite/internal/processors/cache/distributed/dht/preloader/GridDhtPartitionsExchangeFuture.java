@@ -536,13 +536,14 @@ public class GridDhtPartitionsExchangeFuture extends GridDhtTopologyFutureAdapte
             else
                 state = cctx.kernalContext().clientNode() ? ExchangeLocalState.CLIENT : ExchangeLocalState.SRV;
 
-            if (exchLog.isInfoEnabled())
+            if (exchLog.isInfoEnabled()) {
                 exchLog.info("Started exchange init [topVer=" + topVer +
                     ", crd=" + crdNode +
                     ", evt=" + IgniteUtils.gridEventName(discoEvt.type()) +
                     ", evtNode=" + discoEvt.eventNode().id() +
-                    ", customEvt=" + (discoEvt.type() == EVT_DISCOVERY_CUSTOM_EVT ? ((DiscoveryCustomEvent)discoEvt).customMessage() : null) +
-                    ']');
+                    ", customEvt=" + (discoEvt.type() == EVT_DISCOVERY_CUSTOM_EVT ? ((DiscoveryCustomEvent) discoEvt).customMessage() : null) +
+                    ", allowMerge=" + exchCtx.mergeExchanges() + ']');
+            }
 
             ExchangeType exchange;
 
