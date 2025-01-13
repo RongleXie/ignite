@@ -19,15 +19,21 @@ package org.apache.ignite.internal.processors.query.calcite.integration;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.cluster.ClusterState;
 import org.apache.ignite.configuration.DataRegionConfiguration;
 import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
+import org.apache.ignite.internal.IgniteInternalFuture;
 import org.apache.ignite.internal.cache.query.index.IndexProcessor;
 import org.apache.ignite.internal.managers.indexing.IndexesRebuildTask;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
+import org.apache.ignite.internal.processors.query.calcite.CalciteQueryProcessor;
 import org.apache.ignite.internal.processors.query.calcite.QueryChecker;
+import org.apache.ignite.internal.processors.query.calcite.schema.IgniteCacheTable;
+import org.apache.ignite.internal.processors.query.calcite.util.Commons;
 import org.apache.ignite.internal.processors.query.schema.IndexRebuildCancelToken;
 import org.apache.ignite.internal.processors.query.schema.SchemaIndexCacheVisitorClosure;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
@@ -84,7 +90,6 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         executeSql("CREATE TABLE tbl (id INT PRIMARY KEY, val VARCHAR, val2 VARCHAR) WITH CACHE_NAME=\"test\"");
         executeSql("CREATE INDEX idx_id_val ON tbl (id DESC, val)");
         executeSql("CREATE INDEX idx_id_val2 ON tbl (id, val2 DESC)");
-        executeSql("CREATE INDEX idx_val ON tbl (val DESC)");
 
         for (int i = 0; i < 100; i++)
             executeSql("INSERT INTO tbl VALUES (?, ?, ?)", i, "val" + i, "val" + i);
@@ -184,16 +189,134 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         checkRebuildIndexQuery(grid(1), checker, checker);
 
         // Order by another collation.
-        sql = "SELECT * FROM tbl WHERE val BETWEEN 'val10' AND 'val15' ORDER BY val";
+        executeSql("CREATE INDEX idx_val ON tbl (val DESC)");
 
-        checker = assertQuery(initNode, sql)
-            .matches(QueryChecker.containsSubPlan("IgniteSort"))
-            .matches(QueryChecker.containsIndexScan("PUBLIC", "TBL", "IDX_VAL"))
-            .returns(10, "val10", "val10").returns(11, "val11", "val11").returns(12, "val12", "val12")
-            .returns(13, "val13", "val13").returns(14, "val14", "val14").returns(15, "val15", "val15")
-            .ordered();
+        try {
+            sql = "SELECT * FROM tbl WHERE val BETWEEN 'val10' AND 'val15' ORDER BY val";
 
-        checkRebuildIndexQuery(grid(1), checker, checker);
+            checker = assertQuery(initNode, sql)
+                .matches(QueryChecker.containsSubPlan("IgniteSort"))
+                .matches(QueryChecker.containsIndexScan("PUBLIC", "TBL", "IDX_VAL"))
+                .returns(10, "val10", "val10").returns(11, "val11", "val11").returns(12, "val12", "val12")
+                .returns(13, "val13", "val13").returns(14, "val14", "val14").returns(15, "val15", "val15")
+                .ordered();
+
+            checkRebuildIndexQuery(grid(1), checker, checker);
+        }
+        finally {
+            executeSql("DROP INDEX idx_val");
+        }
+    }
+
+    /**
+     * Test min-max optimization with index rebuilding.
+     */
+    @Test
+    public void testIndexFirstLastAtUnavailableIndex() throws IgniteCheckedException {
+        int records = 50;
+        int iterations = 500;
+
+        CalciteQueryProcessor srvEngine = Commons.lookupComponent(grid(0).context(), CalciteQueryProcessor.class);
+
+        for (boolean asc : new boolean[] {true, false}) {
+            for (int backups = -1; backups < 3; ++backups) {
+                String ddl = "CREATE TABLE tbl3 (id INT PRIMARY KEY, val BIGINT, val2 VARCHAR) WITH ";
+
+                ddl += backups < 0 ? "TEMPLATE=REPLICATED" : "TEMPLATE=PARTITIONED,backups=" + backups;
+
+                executeSql(ddl);
+
+                executeSql("CREATE INDEX TEST_IDX ON tbl3(val " + (asc ? "asc)" : "desc)"));
+
+                executeSql("INSERT INTO tbl3 VALUES (-1, null, null)");
+
+                for (int i = 0; i < records; i++)
+                    executeSql("INSERT INTO tbl3 VALUES (?, ?, ?)", i, i, "val" + i);
+
+                executeSql("INSERT INTO tbl3 VALUES (" + records + ", null, null)");
+
+                IgniteCacheTable tbl3 = (IgniteCacheTable)srvEngine.schemaHolder().schema("PUBLIC").getTable("TBL3");
+
+                AtomicBoolean stop = new AtomicBoolean();
+
+                tbl3.markIndexRebuildInProgress(false);
+
+                IgniteInternalFuture<?> fut = GridTestUtils.runAsync(() -> {
+                    boolean lever = true;
+
+                    while (!stop.get())
+                        tbl3.markIndexRebuildInProgress(lever = !lever);
+                });
+
+                try {
+                    for (int i = 0; i < iterations; ++i) {
+                        assertQuery("select MIN(val) from tbl3").returns((long)0).check();
+
+                        assertQuery("select MAX(val) from tbl3").returns((long)(records - 1)).check();
+                    }
+                }
+                finally {
+                    stop.set(true);
+
+                    tbl3.markIndexRebuildInProgress(false);
+
+                    executeSql("DROP TABLE tbl3");
+                }
+
+                fut.get();
+            }
+        }
+    }
+
+    /**
+     * Test IndexCount is disabled at index rebuilding.
+     */
+    @Test
+    public void testIndexCountAtUnavailableIndex() throws IgniteCheckedException {
+        int records = 50;
+        int iterations = 500;
+
+        CalciteQueryProcessor srvEngine = Commons.lookupComponent(grid(0).context(), CalciteQueryProcessor.class);
+
+        for (int backups = -1; backups < 3; ++backups) {
+            String ddl = "CREATE TABLE tbl3 (id INT PRIMARY KEY, val VARCHAR, val2 VARCHAR) WITH ";
+
+            ddl += backups < 0 ? "TEMPLATE=REPLICATED" : "TEMPLATE=PARTITIONED,backups=" + backups;
+
+            executeSql(ddl);
+
+            executeSql("CREATE INDEX idx_val ON tbl3(val)");
+
+            for (int i = 0; i < records; i++)
+                executeSql("INSERT INTO tbl3 VALUES (?, ?, ?)", i, i % 2 == 0 ? null : "val" + i, "val" + i);
+
+            IgniteCacheTable tbl3 = (IgniteCacheTable)srvEngine.schemaHolder().schema("PUBLIC").getTable("TBL3");
+
+            AtomicBoolean stop = new AtomicBoolean();
+
+            IgniteInternalFuture<?> fut = GridTestUtils.runAsync(() -> {
+                boolean lever = true;
+
+                while (!stop.get())
+                    tbl3.markIndexRebuildInProgress(lever = !lever);
+            });
+
+            try {
+                for (int i = 0; i < iterations; ++i) {
+                    assertQuery("select COUNT(*) from tbl3").returns((long)records).check();
+                    assertQuery("select COUNT(val) from tbl3").returns((long)records / 2L).check();
+                }
+            }
+            finally {
+                stop.set(true);
+
+                tbl3.markIndexRebuildInProgress(false);
+
+                executeSql("DROP TABLE tbl3");
+            }
+
+            fut.get();
+        }
     }
 
     /** */
@@ -202,7 +325,7 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         IgniteEx initNode = grid(0);
 
         // Correlated join with correlation in filter, without project.
-        String sql = "SELECT /*+ DISABLE_RULE('MergeJoinConverter', 'NestedLoopJoinConverter') */ tbl2.id, tbl.val " +
+        String sql = "SELECT /*+ CNL_JOIN */ tbl2.id, tbl.val " +
             "FROM tbl2 LEFT JOIN tbl ON tbl.id = tbl2.id AND tbl.val = tbl2.val AND tbl.id % 2 = 0 " +
             "WHERE tbl2.id BETWEEN 10 AND 19";
 
@@ -215,7 +338,7 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         checkRebuildIndexQuery(grid(1), checker, checker);
 
         // Correlated join with correlation in filter, with project.
-        sql = "SELECT /*+ DISABLE_RULE('MergeJoinConverter', 'NestedLoopJoinConverter') */ tbl2.id, tbl.val1 " +
+        sql = "SELECT /*+ CNL_JOIN */ tbl2.id, tbl.val1 " +
             "FROM tbl2 JOIN (SELECT tbl.val || '-' AS val1, val, id FROM tbl) AS tbl " +
             "ON tbl.id = tbl2.id AND tbl.val = tbl2.val " +
             "WHERE tbl2.id BETWEEN 10 AND 12";
@@ -234,7 +357,7 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         IgniteEx initNode = grid(0);
 
         // Correlated join with correlation in filter, with project as a subset of collation.
-        String sql = "SELECT /*+ DISABLE_RULE('MergeJoinConverter', 'NestedLoopJoinConverter') */ tbl2.id, tbl.id1 " +
+        String sql = "SELECT /*+ CNL_JOIN */ tbl2.id, tbl.id1 " +
             "FROM tbl2 JOIN (SELECT tbl.id + 1 AS id1, id FROM tbl WHERE val >= 'val') AS tbl " +
             "ON tbl.id = tbl2.id " +
             "WHERE tbl2.val BETWEEN 'val10' AND 'val12'";
@@ -247,7 +370,7 @@ public class IndexRebuildIntegrationTest extends AbstractBasicIntegrationTest {
         checkRebuildIndexQuery(grid(1), checker, checker);
 
         // Correlated join with correlation in filter, with a project as a subset of collation with DESC ordering.
-        sql = "SELECT /*+ DISABLE_RULE('MergeJoinConverter', 'NestedLoopJoinConverter') */ tbl2.id, tbl.id1 " +
+        sql = "SELECT /*+ CNL_JOIN */ tbl2.id, tbl.id1 " +
             "FROM tbl2 JOIN (SELECT tbl.id + 1 AS id1, id FROM tbl WHERE val2 >= 'val') AS tbl " +
             "ON tbl.id = tbl2.id " +
             "WHERE tbl2.val BETWEEN 'val10' AND 'val12'";

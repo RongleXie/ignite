@@ -18,7 +18,6 @@ package org.apache.ignite.internal.processors.query.stat.config;
 
 import java.io.Serializable;
 import java.util.Objects;
-
 import org.apache.ignite.internal.util.typedef.internal.S;
 
 /**
@@ -157,8 +156,7 @@ public class StatisticsColumnConfiguration implements Serializable {
      *
      * @return Columns configuration for refresh statistic.
      */
-    public StatisticsColumnConfiguration refresh()
-    {
+    public StatisticsColumnConfiguration refresh() {
         return new StatisticsColumnConfiguration(this, tombstone ? ver : ver + 1, tombstone, overrides);
     }
 

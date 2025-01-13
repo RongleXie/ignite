@@ -36,13 +36,8 @@ public class GroupKey {
     }
 
     /** */
-    public Object field(int idx) {
-        return fields[idx];
-    }
-
-    /** */
-    public int fieldsCount() {
-        return fields.length;
+    public Object[] fields() {
+        return fields;
     }
 
     /** {@inheritDoc} */
@@ -52,9 +47,9 @@ public class GroupKey {
         if (o == null || getClass() != o.getClass())
             return false;
 
-        GroupKey groupKey = (GroupKey)o;
+        GroupKey grpKey = (GroupKey)o;
 
-        return Arrays.equals(fields, groupKey.fields);
+        return Arrays.equals(fields, grpKey.fields);
     }
 
     /** {@inheritDoc} */

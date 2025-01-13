@@ -19,10 +19,13 @@ package org.apache.ignite.internal.processors.query.calcite.prepare;
 
 import com.google.common.collect.ImmutableList;
 import org.apache.calcite.plan.RelOptCluster;
+import org.apache.ignite.internal.processors.query.calcite.rel.IgniteCollect;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteCorrelatedNestedLoopJoin;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteExchange;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteFilter;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteHashIndexSpool;
+import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexBound;
+import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexCount;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexScan;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteLimit;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteMergeJoin;
@@ -153,6 +156,16 @@ public class Cloner implements IgniteRelVisitor<IgniteRel> {
     }
 
     /** {@inheritDoc} */
+    @Override public IgniteRel visit(IgniteIndexBound rel) {
+        return rel.clone(cluster, F.asList());
+    }
+
+    /** {@inheritDoc} */
+    @Override public IgniteRel visit(IgniteIndexCount rel) {
+        return rel.clone(cluster, F.asList());
+    }
+
+    /** {@inheritDoc} */
     @Override public IgniteRel visit(IgniteTableScan rel) {
         return rel.clone(cluster, F.asList());
     }
@@ -240,6 +253,11 @@ public class Cloner implements IgniteRelVisitor<IgniteRel> {
     /** {@inheritDoc} */
     @Override public IgniteRel visit(IgniteTableFunctionScan rel) {
         return rel.clone(cluster, F.asList());
+    }
+
+    /** {@inheritDoc} */
+    @Override public IgniteRel visit(IgniteCollect rel) {
+        return rel.clone(cluster, F.asList(visit((IgniteRel)rel.getInput())));
     }
 
     /** {@inheritDoc} */

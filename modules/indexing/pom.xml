@@ -112,8 +112,8 @@
         </dependency>
 
         <dependency>
-            <groupId>log4j</groupId>
-            <artifactId>log4j</artifactId>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -152,6 +152,13 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>org.locationtech.jts</groupId>
+            <artifactId>jts-core</artifactId>
+            <version>1.19.0</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
@@ -170,8 +177,8 @@
 
             <!-- Generate the OSGi MANIFEST.MF for this bundle.
                  This bundle is a fragment attached to the ignite-core bundle, as it contains and exports classes in
-                 the org.apache.ignite.internal.processors.query.h2.opt in the same manner as ignite-geospatial, thus
-                 leading to a split package situation in OSGi. It also contains an internal processor.
+                 the org.apache.ignite.internal.processors.query.h2.opt, thus leading to a split package situation in OSGi.
+                 It also contains an internal processor.
             -->
             <plugin>
                 <groupId>org.apache.felix</groupId>

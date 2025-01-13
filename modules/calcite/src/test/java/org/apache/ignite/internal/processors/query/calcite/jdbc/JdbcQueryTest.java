@@ -18,9 +18,12 @@
 package org.apache.ignite.internal.processors.query.calcite.jdbc;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.JDBCType;
+import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -73,12 +76,25 @@ public class JdbcQueryTest extends GridCommonAbstractTest {
     /** {@inheritDoc} */
     @Override protected void beforeTest() throws Exception {
         startGrids(nodesCnt);
-        conn = DriverManager.getConnection(url);
-        conn.setSchema("PUBLIC");
-        stmt = conn.createStatement();
+
+        connect(url);
 
         assert stmt != null;
         assert !stmt.isClosed();
+    }
+
+    /** */
+    private void connect(String url) throws Exception {
+        if (stmt != null)
+            stmt.close();
+
+        if (conn != null)
+            conn.close();
+
+        conn = DriverManager.getConnection(url);
+        conn.setSchema("PUBLIC");
+
+        stmt = conn.createStatement();
     }
 
     /** {@inheritDoc} */
@@ -199,6 +215,52 @@ public class JdbcQueryTest extends GridCommonAbstractTest {
         }
     }
 
+    /** Test enforced join order parameter. */
+    @Test
+    public void testEnforcedJoinOrder() throws Exception {
+        stmt.execute("CREATE TABLE Person1(\"ID\" INT, PRIMARY KEY(\"ID\"), \"NAME\" VARCHAR) WITH template=REPLICATED");
+        stmt.execute("CREATE TABLE Person2(\"ID\" INT, PRIMARY KEY(\"ID\"), \"NAME\" VARCHAR) WITH template=REPLICATED");
+
+        for (int i = 0; i < 3; ++i)
+            stmt.execute(String.format("INSERT INTO Person1 VALUES (%d, 'Name')", i));
+
+        for (int i = 0; i < 100; ++i)
+            stmt.addBatch(String.format("INSERT INTO Person2 VALUES (%d, 'Name')", i));
+
+        stmt.executeBatch();
+
+        String scan1 = "Scan(table=[[PUBLIC, PERSON1]]";
+        String scan2 = "Scan(table=[[PUBLIC, PERSON2]]";
+
+        connect(url + "&enforceJoinOrder=true");
+
+        try (ResultSet rs = stmt.executeQuery("EXPLAIN PLAN FOR SELECT p2.Name from Person1 p1 LEFT JOIN Person2 " +
+            "p2 on p2.NAME=p1.NAME")) {
+            assertTrue(rs.next());
+
+            String plan = rs.getString(1);
+
+            // Joins as in the query.
+            assertTrue(plan.indexOf(scan1) < plan.indexOf(scan2));
+
+            // Join type is not changed.
+            assertTrue(plan.contains("joinType=[left]"));
+        }
+
+        try (ResultSet rs = stmt.executeQuery("EXPLAIN PLAN FOR SELECT /*+ NO_NL_JOIN */ " +
+            "p2.Name from Person2 p2 RIGHT JOIN Person1 p1 on p2.NAME=p1.NAME")) {
+            assertTrue(rs.next());
+
+            String plan = rs.getString(1);
+
+            // Joins as in the query.
+            assertTrue(plan.indexOf(scan1) > plan.indexOf(scan2));
+
+            // Join type is not changed.
+            assertTrue(plan.contains("joinType=[right]"));
+        }
+    }
+
     /** Test batched execution of prepared statement. */
     @Test
     public void testBatchPrepared() throws Exception {
@@ -253,12 +315,12 @@ public class JdbcQueryTest extends GridCommonAbstractTest {
      */
     @Test
     public void testMultilineQuery() throws Exception {
-        String multiLineQuery = "CREATE TABLE test (val0 int primary key, val1 varchar);" +
+        String multiLineQry = "CREATE TABLE test (val0 int primary key, val1 varchar);" +
             "INSERT INTO test(val0, val1) VALUES (0, 'test0');" +
             "ALTER TABLE test ADD COLUMN val2 int;" +
             "INSERT INTO test(val0, val1, val2) VALUES(1, 'test1', 10);" +
             "ALTER TABLE test DROP COLUMN val2;";
-        stmt.execute(multiLineQuery);
+        stmt.execute(multiLineQry);
 
         try (ResultSet rs = stmt.executeQuery("select * from test order by val0")) {
             int i;
@@ -344,6 +406,52 @@ public class JdbcQueryTest extends GridCommonAbstractTest {
         stmt.execute("DROP TABLE t1");
 
         stmt.close();
+    }
+
+    /**
+     * @throws SQLException If failed.
+     */
+    @Test
+    public void testParametersMetadata() throws Exception {
+        stmt.execute("CREATE TABLE Person(id BIGINT, PRIMARY KEY(id), name VARCHAR, amount DECIMAL(10,2))");
+
+        try (PreparedStatement stmt = conn.prepareStatement("INSERT INTO Person VALUES (?, ?, ?)")) {
+            ParameterMetaData meta = stmt.getParameterMetaData();
+
+            assertEquals(3, meta.getParameterCount(), 3);
+
+            assertEquals(Long.class.getName(), meta.getParameterClassName(1));
+            assertEquals(String.class.getName(), meta.getParameterClassName(2));
+            assertEquals(BigDecimal.class.getName(), meta.getParameterClassName(3));
+
+            assertEquals(JDBCType.valueOf(Types.BIGINT).getName(), meta.getParameterTypeName(1));
+            assertEquals(JDBCType.valueOf(Types.VARCHAR).getName(), meta.getParameterTypeName(2));
+            assertEquals(JDBCType.valueOf(Types.DECIMAL).getName(), meta.getParameterTypeName(3));
+
+            assertEquals(Types.BIGINT, meta.getParameterType(1));
+            assertEquals(Types.VARCHAR, meta.getParameterType(2));
+            assertEquals(Types.DECIMAL, meta.getParameterType(3));
+
+            assertEquals(19, meta.getPrecision(1));
+            assertEquals(-1, meta.getPrecision(2));
+            assertEquals(10, meta.getPrecision(3));
+
+            assertEquals(0, meta.getScale(1));
+            assertEquals(Integer.MIN_VALUE, meta.getScale(2));
+            assertEquals(2, meta.getScale(3));
+
+            assertEquals(ParameterMetaData.parameterNullable, meta.isNullable(1));
+            assertEquals(ParameterMetaData.parameterNullable, meta.isNullable(2));
+            assertEquals(ParameterMetaData.parameterNullable, meta.isNullable(3));
+
+            assertEquals(ParameterMetaData.parameterModeIn, meta.getParameterMode(1));
+            assertEquals(ParameterMetaData.parameterModeIn, meta.getParameterMode(2));
+            assertEquals(ParameterMetaData.parameterModeIn, meta.getParameterMode(3));
+
+            assertTrue(meta.isSigned(1));
+            assertTrue(meta.isSigned(2));
+            assertTrue(meta.isSigned(3));
+        }
     }
 
     /** Some object to store. */

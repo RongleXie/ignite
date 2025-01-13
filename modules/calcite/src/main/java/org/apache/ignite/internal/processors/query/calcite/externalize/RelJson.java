@@ -72,6 +72,7 @@ import org.apache.calcite.rex.RexVariable;
 import org.apache.calcite.rex.RexWindow;
 import org.apache.calcite.rex.RexWindowBound;
 import org.apache.calcite.rex.RexWindowBounds;
+import org.apache.calcite.runtime.SqlFunctions;
 import org.apache.calcite.sql.JoinConditionType;
 import org.apache.calcite.sql.JoinType;
 import org.apache.calcite.sql.SqlAggFunction;
@@ -100,6 +101,10 @@ import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Util;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.internal.processors.query.calcite.prepare.BaseQueryContext;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.ExactBounds;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.MultiBounds;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.RangeBounds;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.SearchBounds;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteRel;
 import org.apache.ignite.internal.processors.query.calcite.trait.DistributionFunction;
 import org.apache.ignite.internal.processors.query.calcite.trait.DistributionTrait;
@@ -132,8 +137,8 @@ class RelJson {
         Class<?> clazz = null;
 
         if (!typeName.contains(".")) {
-            for (String package_ : PACKAGES) {
-                if ((clazz = classForName(package_ + typeName, true)) != null)
+            for (String pkg_ : PACKAGES) {
+                if ((clazz = classForName(pkg_ + typeName, true)) != null)
                     break;
             }
         }
@@ -245,9 +250,9 @@ class RelJson {
             return class_.getSimpleName();
 
         String canonicalName = class_.getName();
-        for (String package_ : PACKAGES) {
-            if (canonicalName.startsWith(package_)) {
-                String remaining = canonicalName.substring(package_.length());
+        for (String pkg_ : PACKAGES) {
+            if (canonicalName.startsWith(pkg_)) {
+                String remaining = canonicalName.substring(pkg_.length());
                 if (remaining.indexOf('.') < 0 && remaining.indexOf('$') < 0)
                     return remaining;
             }
@@ -304,6 +309,8 @@ class RelJson {
             return toJson((RelDataTypeField)value);
         else if (value instanceof ByteString)
             return toJson((ByteString)value);
+        else if (value instanceof SearchBounds)
+            return toJson((SearchBounds)value);
         else
             throw new UnsupportedOperationException("type not serializable: "
                 + value + " (type " + value.getClass().getCanonicalName() + ")");
@@ -525,8 +532,10 @@ class RelJson {
                     literal = toEnum(literal);
                 else if (type.getSqlTypeName().getFamily() == SqlTypeFamily.BINARY)
                     literal = toByteString(literal);
+                else if (type.getSqlTypeName().getFamily() == SqlTypeFamily.NUMERIC && literal instanceof Number)
+                    literal = SqlFunctions.toBigDecimal((Number)literal);
 
-                return rexBuilder.makeLiteral(literal, type, false);
+                return rexBuilder.makeLiteral(literal, type, true);
             }
 
             throw new UnsupportedOperationException("cannot convert to rex " + o);
@@ -567,9 +576,9 @@ class RelJson {
         for (SqlOperator operator : operators)
             if (operator.kind == sqlKind)
                 return operator;
-        String class_ = (String)map.get("class");
-        if (class_ != null)
-            return AvaticaUtils.instantiatePlugin(SqlOperator.class, class_);
+        String cls_ = (String)map.get("class");
+        if (cls_ != null)
+            return AvaticaUtils.instantiatePlugin(SqlOperator.class, cls_);
         return null;
     }
 
@@ -592,9 +601,9 @@ class RelJson {
     <T extends Enum<T>> T toEnum(Object o) {
         if (o instanceof Map) {
             Map<String, Object> map = (Map<String, Object>)o;
-            String class_ = (String)map.get("class");
+            String cls_ = (String)map.get("class");
             String name = map.get("name").toString();
-            return Util.enumVal((Class<T>)classForName(class_, false), name);
+            return Util.enumVal((Class<T>)classForName(cls_, false), name);
         }
 
         assert o instanceof String && ENUM_BY_NAME.containsKey(o);
@@ -678,6 +687,37 @@ class RelJson {
     }
 
     /** */
+    private SearchBounds toSearchBound(RelInput input, Map<String, Object> map) {
+        if (map == null)
+            return null;
+
+        String type = (String)map.get("type");
+
+        if (SearchBounds.Type.EXACT.name().equals(type))
+            return new ExactBounds(null, toRex(input, map.get("bound")));
+        else if (SearchBounds.Type.MULTI.name().equals(type))
+            return new MultiBounds(null, toSearchBoundList(input, (List<Map<String, Object>>)map.get("bounds")));
+        else if (SearchBounds.Type.RANGE.name().equals(type)) {
+            return new RangeBounds(null,
+                toRex(input, map.get("lowerBound")),
+                toRex(input, map.get("upperBound")),
+                (Boolean)map.get("lowerInclude"),
+                (Boolean)map.get("upperInclude")
+            );
+        }
+
+        throw new IllegalStateException("Unsupported search bound type: " + type);
+    }
+
+    /** */
+    List<SearchBounds> toSearchBoundList(RelInput input, List<Map<String, Object>> bounds) {
+        if (bounds == null)
+            return null;
+
+        return bounds.stream().map(b -> toSearchBound(input, b)).collect(Collectors.toList());
+    }
+
+    /** */
     private Object toJson(Enum<?> enum0) {
         String key = enum0.getDeclaringClass().getSimpleName() + "#" + enum0.name();
 
@@ -699,6 +739,8 @@ class RelJson {
         map.put("operands", node.getArgList());
         map.put("filter", node.filterArg);
         map.put("name", node.getName());
+        map.put("coll", toJson(node.getCollation()));
+        map.put("rexList", toJson(node.rexList));
         return map;
     }
 
@@ -780,9 +822,9 @@ class RelJson {
                 return map;
             case LITERAL:
                 RexLiteral literal = (RexLiteral)node;
-                Object value = literal.getValue3();
+                Object val = literal.getValue3();
                 map = map();
-                map.put("literal", toJson(value));
+                map.put("literal", toJson(val));
                 map.put("type", toJson(node.getType()));
 
                 return map;
@@ -953,5 +995,28 @@ class RelJson {
     /** */
     private Object toJson(ByteString val) {
         return val.toString();
+    }
+
+    /** */
+    private Object toJson(SearchBounds val) {
+        Map map = map();
+        map.put("type", val.type().name());
+
+        if (val instanceof ExactBounds)
+            map.put("bound", toJson(((ExactBounds)val).bound()));
+        else if (val instanceof MultiBounds)
+            map.put("bounds", toJson(((MultiBounds)val).bounds()));
+        else {
+            assert val instanceof RangeBounds : val;
+
+            RangeBounds val0 = (RangeBounds)val;
+
+            map.put("lowerBound", val0.lowerBound() == null ? null : toJson(val0.lowerBound()));
+            map.put("upperBound", val0.upperBound() == null ? null : toJson(val0.upperBound()));
+            map.put("lowerInclude", val0.lowerInclude());
+            map.put("upperInclude", val0.upperInclude());
+        }
+
+        return map;
     }
 }

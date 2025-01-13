@@ -25,9 +25,6 @@ import java.util.UUID;
 import org.apache.ignite.internal.direct.state.DirectMessageState;
 import org.apache.ignite.internal.direct.state.DirectMessageStateItem;
 import org.apache.ignite.internal.direct.stream.DirectByteBufferStream;
-import org.apache.ignite.internal.direct.stream.v1.DirectByteBufferStreamImplV1;
-import org.apache.ignite.internal.direct.stream.v2.DirectByteBufferStreamImplV2;
-import org.apache.ignite.internal.direct.stream.v3.DirectByteBufferStreamImplV3;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.internal.S;
@@ -46,21 +43,9 @@ public class DirectMessageWriter implements MessageWriter {
     @GridToStringInclude
     private final DirectMessageState<StateItem> state;
 
-    /** Protocol version. */
-    @GridToStringInclude
-    private final byte protoVer;
-
-    /**
-     * @param protoVer Protocol version.
-     */
-    public DirectMessageWriter(final byte protoVer) {
-        state = new DirectMessageState<>(StateItem.class, new IgniteOutClosure<StateItem>() {
-            @Override public StateItem apply() {
-                return new StateItem(protoVer);
-            }
-        });
-
-        this.protoVer = protoVer;
+    /** */
+    public DirectMessageWriter() {
+        state = new DirectMessageState<>(StateItem.class, (IgniteOutClosure<StateItem>)StateItem::new);
     }
 
     /** {@inheritDoc} */
@@ -282,15 +267,11 @@ public class DirectMessageWriter implements MessageWriter {
 
     /** {@inheritDoc} */
     @Override public boolean writeAffinityTopologyVersion(String name, AffinityTopologyVersion val) {
-        if (protoVer >= 3) {
-            DirectByteBufferStream stream = state.item().stream;
+        DirectByteBufferStream stream = state.item().stream;
 
-            stream.writeAffinityTopologyVersion(val);
+        stream.writeAffinityTopologyVersion(val);
 
-            return stream.lastFinished();
-        }
-
-        return writeMessage(name, val);
+        return stream.lastFinished();
     }
 
     /** {@inheritDoc} */
@@ -382,29 +363,9 @@ public class DirectMessageWriter implements MessageWriter {
         /** */
         private boolean hdrWritten;
 
-        /**
-         * @param protoVer Protocol version.
-         */
-        public StateItem(byte protoVer) {
-            switch (protoVer) {
-                case 1:
-                    stream = new DirectByteBufferStreamImplV1(null);
-
-                    break;
-
-                case 2:
-                    stream = new DirectByteBufferStreamImplV2(null);
-
-                    break;
-
-                case 3:
-                    stream = new DirectByteBufferStreamImplV3(null);
-
-                    break;
-
-                default:
-                    throw new IllegalStateException("Invalid protocol version: " + protoVer);
-            }
+        /** */
+        public StateItem() {
+            stream = new DirectByteBufferStream(null);
         }
 
         /** {@inheritDoc} */

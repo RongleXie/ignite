@@ -53,12 +53,17 @@ import org.apache.ignite.internal.binary.BinaryMetadata;
 import org.apache.ignite.internal.binary.BinaryNoopMetadataHandler;
 import org.apache.ignite.internal.binary.BinaryRawReaderEx;
 import org.apache.ignite.internal.binary.BinaryRawWriterEx;
+import org.apache.ignite.internal.binary.BinaryReaderExImpl;
 import org.apache.ignite.internal.binary.BinarySchema;
 import org.apache.ignite.internal.binary.BinarySchemaRegistry;
 import org.apache.ignite.internal.binary.BinaryTypeImpl;
 import org.apache.ignite.internal.binary.BinaryUtils;
 import org.apache.ignite.internal.binary.GridBinaryMarshaller;
+import org.apache.ignite.internal.binary.streams.BinaryInputStream;
+import org.apache.ignite.internal.processors.cache.CacheObject;
+import org.apache.ignite.internal.processors.cache.KeyCacheObjectImpl;
 import org.apache.ignite.internal.processors.cache.binary.CacheObjectBinaryProcessorImpl;
+import org.apache.ignite.internal.processors.cacheobject.PlatformCacheObjectImpl;
 import org.apache.ignite.internal.processors.platform.PlatformContext;
 import org.apache.ignite.internal.processors.platform.PlatformExtendedException;
 import org.apache.ignite.internal.processors.platform.PlatformNativeException;
@@ -796,8 +801,7 @@ public class PlatformUtils {
      * @param resObj Result.
      * @param err Error.
      */
-    public static void writeInvocationResult(BinaryRawWriterEx writer, Object resObj, Throwable err)
-    {
+    public static void writeInvocationResult(BinaryRawWriterEx writer, Object resObj, Throwable err) {
         if (err == null) {
             writer.writeBoolean(true);
             writer.writeObject(resObj);
@@ -857,9 +861,9 @@ public class PlatformUtils {
             return deserialize ? reader.readObject() : reader.readObjectDetached();
         else {
             // 3. Read whether exception is in form of object or string.
-            boolean hasException = reader.readBoolean();
+            boolean hasEx = reader.readBoolean();
 
-            if (hasException) {
+            if (hasEx) {
                 // 4. Full exception.
                 Object nativeErr = reader.readObjectDetached();
 
@@ -1287,7 +1291,8 @@ public class PlatformUtils {
                 writer.writeString(e.getKey());
                 writer.writeObjectDetached(e.getValue());
             }
-        } else {
+        }
+        else {
             writer.writeInt(0);
         }
     }
@@ -1361,6 +1366,36 @@ public class PlatformUtils {
             return PLATFORM_DOTNET;
 
         return "";
+    }
+
+    /**
+     * Read cache object from the stream as raw bytes to avoid marshalling.
+     *
+     * @param reader Reader.
+     * @param isKey {@code True} if object is a key.
+     */
+    public static <T extends CacheObject> T readCacheObject(BinaryReaderExImpl reader, boolean isKey) {
+        BinaryInputStream in = reader.in();
+
+        int pos0 = in.position();
+
+        Object obj = reader.readObjectDetached();
+
+        if (obj == null)
+            return null;
+
+        if (obj instanceof CacheObject)
+            return (T)obj;
+
+        int pos1 = in.position();
+
+        in.position(pos0);
+
+        byte[] objBytes = in.readByteArray(pos1 - pos0);
+
+        return isKey ?
+            (T)new KeyCacheObjectImpl(obj, objBytes, -1) :
+            (T)new PlatformCacheObjectImpl(obj, objBytes);
     }
 
     /**

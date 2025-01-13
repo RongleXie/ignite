@@ -16,20 +16,27 @@
  */
 package org.apache.ignite.internal.processors.query.calcite.sql;
 
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Predicate;
-
+import java.util.stream.Collectors;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import org.apache.calcite.sql.SqlCall;
+import org.apache.calcite.sql.SqlHint;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlKind;
 import org.apache.calcite.sql.SqlLiteral;
 import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNumericLiteral;
+import org.apache.calcite.sql.SqlSelect;
 import org.apache.calcite.sql.ddl.SqlColumnDeclaration;
+import org.apache.calcite.sql.ddl.SqlCreateView;
+import org.apache.calcite.sql.ddl.SqlDropView;
 import org.apache.calcite.sql.ddl.SqlKeyConstraint;
 import org.apache.calcite.sql.parser.SqlParseException;
 import org.apache.calcite.sql.parser.SqlParser;
@@ -41,17 +48,30 @@ import org.apache.ignite.internal.processors.query.calcite.sql.kill.IgniteSqlKil
 import org.apache.ignite.internal.processors.query.calcite.sql.kill.IgniteSqlKillScanQuery;
 import org.apache.ignite.internal.processors.query.calcite.sql.kill.IgniteSqlKillService;
 import org.apache.ignite.internal.processors.query.calcite.sql.kill.IgniteSqlKillTransaction;
+import org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyze;
+import org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOption;
+import org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum;
+import org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsCommand;
+import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.lang.IgniteUuid;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.hamcrest.CustomMatcher;
 import org.hamcrest.Matcher;
+import org.jetbrains.annotations.Nullable;
 import org.junit.Test;
 
 import static java.util.Collections.singleton;
+import static org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum.DISTINCT;
+import static org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum.MAX_CHANGED_PARTITION_ROWS_PERCENT;
+import static org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum.NULLS;
+import static org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum.SIZE;
+import static org.apache.ignite.internal.processors.query.calcite.sql.stat.IgniteSqlStatisticsAnalyzeOptionEnum.TOTAL;
+import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.hasItem;
 import static org.hamcrest.CoreMatchers.instanceOf;
 import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.nullValue;
 import static org.junit.Assert.assertThat;
 
 /**
@@ -63,9 +83,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableSimpleCase() throws SqlParseException {
-        String query = "create table my_table(id int, val varchar)";
+        String qry = "create table my_table(id int, val varchar)";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -82,9 +102,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableQuotedIdentifiers() throws SqlParseException {
-        String query = "create table \"My_Table\"(\"Id\" int, \"Val\" varchar)";
+        String qry = "create table \"My_Table\"(\"Id\" int, \"Val\" varchar)";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -101,9 +121,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableIfNotExists() throws SqlParseException {
-        String query = "create table if not exists my_table(id int, val varchar)";
+        String qry = "create table if not exists my_table(id int, val varchar)";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -121,9 +141,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithPkCase1() throws SqlParseException {
-        String query = "create table my_table(id int primary key, val varchar)";
+        String qry = "create table my_table(id int primary key, val varchar)";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -145,9 +165,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithPkCase2() throws SqlParseException {
-        String query = "create table my_table(id int, val varchar, primary key(id))";
+        String qry = "create table my_table(id int, val varchar, primary key(id))";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -169,9 +189,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithPkCase3() throws SqlParseException {
-        String query = "create table my_table(id int, val varchar, constraint pk_key primary key(id))";
+        String qry = "create table my_table(id int, val varchar, constraint pk_key primary key(id))";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -193,9 +213,9 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithPkCase4() throws SqlParseException {
-        String query = "create table my_table(id1 int, id2 int, val varchar, primary key(id1, id2))";
+        String qry = "create table my_table(id1 int, id2 int, val varchar, primary key(id1, id2))";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -218,7 +238,7 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithOptions() throws SqlParseException {
-        String query = "create table my_table(id int) with" +
+        String qry = "create table my_table(id int) with" +
             " template=\"my_template\"," +
             " backups=2," +
             " affinity_key=my_aff," +
@@ -231,7 +251,7 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
             " value_type=my_value_type," +
             " encrypted=true";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -255,7 +275,7 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void createTableWithOptionsQuoted() throws SqlParseException {
-        String query = "create table my_table(id int) with \"" +
+        String qry = "create table my_table(id int) with \"" +
             " template=my_template," +
             " backups=2," +
             " affinity_key=My_Aff," +
@@ -269,7 +289,7 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
             " encrypted=true" +
             "\"";
 
-        SqlNode node = parse(query);
+        SqlNode node = parse(qry);
 
         assertThat(node, instanceOf(IgniteSqlCreateTable.class));
 
@@ -353,6 +373,19 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
 
         assertThat(createIdx.indexName().names, is(ImmutableList.of("MY_INDEX")));
         assertThat(createIdx.tableName().names, is(ImmutableList.of("MY_SCHEMA", "MY_TABLE")));
+    }
+
+    /**
+     * Create index on table with schema.
+     */
+    @Test
+    public void createIndexEmptyName() throws SqlParseException {
+        String qry = "create index on my_table(id)";
+
+        IgniteSqlCreateIndex createIdx = parse(qry);
+
+        assertThat(createIdx.indexName(), nullValue());
+        assertThat(createIdx.tableName().names, is(ImmutableList.of("MY_TABLE")));
     }
 
     /**
@@ -660,6 +693,93 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
     }
 
     /**
+     * Tests that CREATE OR REPLACE is not allowed for CREATE TABLE/INDEX/USER.
+     */
+    @Test
+    public void invalidCreateOrReplace() {
+        assertParserThrows("create or replace table my_table(id int, val varchar)", SqlParseException.class,
+            "Unsupported clause 'REPLACE'");
+
+        assertParserThrows("create or replace index my_index on my_table(id)", SqlParseException.class,
+            "Unsupported clause 'REPLACE'");
+
+        assertParserThrows("create or replace user test with password 'asd'", SqlParseException.class,
+            "Unsupported clause 'REPLACE'");
+    }
+
+    /**
+     * Create view.
+     */
+    @Test
+    public void createView() throws SqlParseException {
+        SqlCreateView createView = parse("create view my_view as select * from my_table");
+
+        assertThat(createView.name.names, is(ImmutableList.of("MY_VIEW")));
+        assertThat(createView.getReplace(), is(false));
+        assertThat(createView.query, instanceOf(SqlSelect.class));
+        assertThat(((SqlSelect)createView.query).getFrom().toString(), is("MY_TABLE"));
+        assertThat(((SqlSelect)createView.query).getSelectList().toString(), is("*"));
+
+        createView = parse("create or replace view my_view as select * from my_table");
+
+        assertThat(createView.name.names, is(ImmutableList.of("MY_VIEW")));
+        assertThat(createView.getReplace(), is(true));
+
+        createView = parse("create view my_schema.my_view as select * from my_table");
+
+        assertThat(createView.name.names, is(ImmutableList.of("MY_SCHEMA", "MY_VIEW")));
+        assertThat(createView.getReplace(), is(false));
+
+        assertParserThrows("create view my_view as unexpected", SqlParseException.class);
+        assertParserThrows("create view my_view(id, name) as select * from my_table", SqlParseException.class);
+        assertParserThrows("create view as select * from my_table", SqlParseException.class);
+
+        createView = parse("create view \"my.schema\".\"my.view\" as select * from my_table");
+
+        assertThat(createView.name.names, is(ImmutableList.of("my.schema", "my.view")));
+
+        createView = parse("create view my_view as select /*+ FORCE_INDEX(my_idx) */ * from my_table");
+
+        assertThat(createView.name.names, is(ImmutableList.of("MY_VIEW")));
+        assertThat(createView.query, instanceOf(SqlSelect.class));
+
+        SqlSelect select = (SqlSelect)createView.query;
+
+        assertThat(select.getHints().size(), is(1));
+        assertThat(select.getHints().get(0), instanceOf(SqlHint.class));
+
+        SqlHint hint = (SqlHint)select.getHints().get(0);
+
+        assertThat(hint.getName(), is("FORCE_INDEX"));
+        assertThat(hint.getOptionList(), is(Collections.singletonList("MY_IDX")));
+    }
+
+    /**
+     * Drop view.
+     */
+    @Test
+    public void dropView() throws SqlParseException {
+        SqlDropView dropView = parse("drop view my_view");
+
+        assertThat(dropView.name.names, is(ImmutableList.of("MY_VIEW")));
+        assertThat(dropView.ifExists, is(false));
+
+        dropView = parse("drop view my_schema.my_view");
+
+        assertThat(dropView.name.names, is(ImmutableList.of("MY_SCHEMA", "MY_VIEW")));
+        assertThat(dropView.ifExists, is(false));
+
+        dropView = parse("drop view if exists my_view");
+
+        assertThat(dropView.name.names, is(ImmutableList.of("MY_VIEW")));
+        assertThat(dropView.ifExists, is(true));
+
+        dropView = parse("drop view \"my.schema\".\"my.view\"");
+
+        assertThat(dropView.name.names, is(ImmutableList.of("my.schema", "my.view")));
+    }
+
+    /**
      * Test kill scan query parsing.
      */
     @Test
@@ -685,11 +805,11 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
      */
     @Test
     public void killService() throws Exception {
-        IgniteSqlKill killService;
+        IgniteSqlKill killSrvc;
 
-        killService = parse("kill service 'my-service'");
-        assertTrue(killService instanceof IgniteSqlKillService);
-        assertEquals("my-service", stringValue(((IgniteSqlKillService)killService).serviceName()));
+        killSrvc = parse("kill service 'my-service'");
+        assertTrue(killSrvc instanceof IgniteSqlKillService);
+        assertEquals("my-service", stringValue(((IgniteSqlKillService)killSrvc).serviceName()));
 
         assertParserThrows("kill service 'my-service' 'test'", SqlParseException.class);
         assertParserThrows("kill service 10000", SqlParseException.class);
@@ -759,18 +879,18 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
         IgniteSqlKill killTask;
 
         UUID nodeId = UUID.randomUUID();
-        long queryId = ThreadLocalRandom.current().nextLong();
+        long qryId = ThreadLocalRandom.current().nextLong();
 
-        killTask = parse("kill query '" + nodeId + "_" + queryId + "'");
+        killTask = parse("kill query '" + nodeId + "_" + qryId + "'");
         assertTrue(killTask instanceof IgniteSqlKillQuery);
         assertEquals(nodeId, ((IgniteSqlKillQuery)killTask).nodeId());
-        assertEquals(queryId, ((IgniteSqlKillQuery)killTask).queryId());
+        assertEquals(qryId, ((IgniteSqlKillQuery)killTask).queryId());
         assertFalse(((IgniteSqlKillQuery)killTask).isAsync());
 
-        killTask = parse("kill query async '" + nodeId + "_" + queryId + "'");
+        killTask = parse("kill query async '" + nodeId + "_" + qryId + "'");
         assertTrue(killTask instanceof IgniteSqlKillQuery);
         assertEquals(nodeId, ((IgniteSqlKillQuery)killTask).nodeId());
-        assertEquals(queryId, ((IgniteSqlKillQuery)killTask).queryId());
+        assertEquals(qryId, ((IgniteSqlKillQuery)killTask).queryId());
         assertTrue(((IgniteSqlKillQuery)killTask).isAsync());
 
         assertParserThrows("kill query '1233415'", SqlParseException.class);
@@ -793,6 +913,92 @@ public class SqlCustomParserTest extends GridCommonAbstractTest {
         assertParserThrows("commit 123", SqlParseException.class);
         assertParserThrows("rollback transaction 123", SqlParseException.class);
         assertParserThrows("rollback 123", SqlParseException.class);
+    }
+
+    /**
+     * Test parsing statistics command.
+     */
+    @Test
+    public void testStatisticsCommands() throws Exception {
+        checkStatisticsCommand("ANALYZE tbl1", "ANALYZE", "TBL1");
+        checkStatisticsCommand("ANALYZE tbl1, tbl2", "ANALYZE", "TBL1,TBL2");
+        checkStatisticsCommand("REFRESH STATISTICS tbl1, tbl2", "REFRESH STATISTICS", "TBL1,TBL2");
+        checkStatisticsCommand("ANALYZE tbl1(a), tbl2", "ANALYZE", "TBL1(A),TBL2");
+        checkStatisticsCommand("ANALYZE tbl1(a), tbl2(b,c), tbl3", "ANALYZE", "TBL1(A),TBL2(B,C),TBL3");
+        checkStatisticsCommand("REFRESH STATISTICS tbl1(a), tbl2(b,c), tbl3", "REFRESH STATISTICS", "TBL1(A),TBL2(B,C),TBL3");
+        checkStatisticsCommand("DROP STATISTICS tbl1(a), tbl2(b,c), tbl3", "DROP STATISTICS", "TBL1(A),TBL2(B,C),TBL3");
+    }
+
+    /**
+     * Test parsing analyze command's options.
+     */
+    @Test
+    public void testStatisticsAnalyzeOptions() throws Exception {
+        checkStatisticsCommand(
+            "ANALYZE schema.tbl1(a,b), tlbl2(c) WITH \"MAX_CHANGED_PARTITION_ROWS_PERCENT=1,DISTINCT=5,NULLS=6,TOTAL=7,SIZE=8\"",
+            "ANALYZE",
+            "SCHEMA.TBL1(A,B),TLBL2(C)",
+            ImmutableMap.of(MAX_CHANGED_PARTITION_ROWS_PERCENT, "1", DISTINCT, "5", NULLS, "6", TOTAL, "7", SIZE, "8")
+        );
+
+        checkStatisticsCommand(
+            "ANALYZE schema.tbl1(a,b), tlbl2(c) WITH MAX_CHANGED_PARTITION_ROWS_PERCENT=1,DISTINCT=5,NULLS=6,TOTAL=7,SIZE=8",
+            "ANALYZE",
+            "SCHEMA.TBL1(A,B),TLBL2(C)",
+            ImmutableMap.of(MAX_CHANGED_PARTITION_ROWS_PERCENT, "1", DISTINCT, "5", NULLS, "6", TOTAL, "7", SIZE, "8")
+        );
+
+        checkStatisticsCommand(
+            "ANALYZE schema.tbl1(a,b), tlbl2(c)",
+            "ANALYZE",
+            "SCHEMA.TBL1(A,B),TLBL2(C)",
+            ImmutableMap.of()
+        );
+    }
+
+    /** */
+    private void checkStatisticsCommand(
+        String sql,
+        String expOperator,
+        String expTables
+    ) throws Exception {
+        checkStatisticsCommand(sql, expOperator, expTables, null);
+    }
+
+    /** */
+    private void checkStatisticsCommand(
+        String sql,
+        String expOperator,
+        String expTables,
+        @Nullable Map<IgniteSqlStatisticsAnalyzeOptionEnum, String> expOptions
+    ) throws Exception {
+        SqlNode res = parse(sql);
+
+        assertTrue(res instanceof IgniteSqlStatisticsCommand);
+
+        assertEquals(expOperator, ((SqlCall)res).getOperator().getName());
+
+        assertEquals(
+            expTables,
+            ((IgniteSqlStatisticsCommand)res).tables().stream().map(t -> {
+                StringBuilder sb = new StringBuilder(t.name().toString());
+
+                if (!F.isEmpty(t.columns()))
+                    sb.append(t.columns().stream().map(SqlNode::toString).collect(Collectors.joining(",", "(", ")")));
+
+                return sb.toString();
+            }).collect(Collectors.joining(","))
+        );
+
+        if (res instanceof IgniteSqlStatisticsAnalyze && !F.isEmpty(expOptions)) {
+            List<IgniteSqlStatisticsAnalyzeOption> options = ((IgniteSqlStatisticsAnalyze)res).options();
+
+            assertThat(
+                options.stream().collect(Collectors.toMap(IgniteSqlStatisticsAnalyzeOption::key,
+                    v -> v.value().toString())),
+                equalTo(expOptions)
+            );
+        }
     }
 
     /** */

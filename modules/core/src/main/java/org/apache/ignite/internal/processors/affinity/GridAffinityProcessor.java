@@ -71,12 +71,12 @@ import org.apache.ignite.lang.IgniteUuid;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import static org.apache.ignite.cache.CacheMode.LOCAL;
 import static org.apache.ignite.events.EventType.EVT_NODE_FAILED;
 import static org.apache.ignite.events.EventType.EVT_NODE_LEFT;
 import static org.apache.ignite.internal.GridClosureCallMode.BROADCAST;
 import static org.apache.ignite.internal.processors.affinity.GridAffinityUtils.affinityJob;
 import static org.apache.ignite.internal.processors.affinity.GridAffinityUtils.unmarshall;
+import static org.apache.ignite.internal.processors.task.TaskExecutionOptions.options;
 
 /**
  * Data affinity processor.
@@ -306,9 +306,8 @@ public class GridAffinityProcessor extends GridProcessorAdapter {
      */
     public <K> List<ClusterNode> mapKeyToPrimaryAndBackups(String cacheName,
         K key,
-        AffinityTopologyVersion topVer)
-        throws IgniteCheckedException
-    {
+        AffinityTopologyVersion topVer
+    ) throws IgniteCheckedException {
         assert cacheName != null;
 
         A.notNull(key, "key");
@@ -516,9 +515,6 @@ public class GridAffinityProcessor extends GridProcessorAdapter {
             return new GridFinishedFuture<>((AffinityInfo)null);
         }
 
-        if (desc.cacheConfiguration().getCacheMode() == LOCAL)
-            return new GridFinishedFuture<>(new IgniteCheckedException("Failed to map keys for LOCAL cache: " + cacheName));
-
         AffinityFuture fut0 = new AffinityFuture(cacheName, topVer, cacheNodes);
 
         IgniteInternalFuture<AffinityInfo> old = affMap.putIfAbsent(key, fut0);
@@ -612,7 +608,13 @@ public class GridAffinityProcessor extends GridProcessorAdapter {
      */
     private IgniteInternalFuture<AffinityInfo> affinityInfoFromNode(String cacheName, AffinityTopologyVersion topVer, ClusterNode n) {
         IgniteInternalFuture<GridTuple3<GridAffinityMessage, GridAffinityMessage, GridAffinityAssignment>> fut = ctx.closure()
-            .callAsyncNoFailover(BROADCAST, affinityJob(cacheName, topVer), F.asList(n), true/*system pool*/, 0, false);
+            .callAsync(
+                BROADCAST,
+                affinityJob(cacheName, topVer),
+                options(F.asList(n))
+                    .withFailoverDisabled()
+                    .asSystemTask()
+            );
 
         return fut.chain(
             new CX1<IgniteInternalFuture<GridTuple3<GridAffinityMessage, GridAffinityMessage, GridAffinityAssignment>>, AffinityInfo>() {

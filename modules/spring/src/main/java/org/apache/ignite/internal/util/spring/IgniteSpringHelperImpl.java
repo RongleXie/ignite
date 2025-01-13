@@ -29,10 +29,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.processors.resource.GridSpringResourceContext;
 import org.apache.ignite.internal.processors.resource.GridSpringResourceContextImpl;
+import org.apache.ignite.internal.util.lang.GridTuple3;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.X;
 import org.apache.ignite.internal.util.typedef.internal.U;
@@ -52,6 +54,11 @@ import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.UrlResource;
+import org.springframework.expression.Expression;
+import org.springframework.expression.common.LiteralExpression;
+import org.springframework.expression.spel.standard.SpelExpressionParser;
+
+import static org.springframework.expression.ParserContext.TEMPLATE_EXPRESSION;
 
 /**
  * Spring configuration helper.
@@ -125,7 +132,16 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
     /** {@inheritDoc} */
     @Override public <T> IgniteBiTuple<Collection<T>, ? extends GridSpringResourceContext> loadConfigurations(
         InputStream cfgStream, Class<T> cls, String... excludedProps) throws IgniteCheckedException {
-        ApplicationContext springCtx = applicationContext(cfgStream, excludedProps);
+        return loadConfigurations(cfgStream, cls, true, excludedProps);
+    }
+
+    /** {@inheritDoc} */
+    @Override public <T> IgniteBiTuple<Collection<T>, ? extends GridSpringResourceContext> loadConfigurations(
+        InputStream cfgStream, Class<T> cls,
+        boolean expEnabled,
+        String... excludedProps
+    ) throws IgniteCheckedException {
+        ApplicationContext springCtx = applicationContext(cfgStream, expEnabled, excludedProps);
         Map<String, T> cfgMap;
 
         try {
@@ -151,6 +167,29 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
 
         ApplicationContext springCtx = initContext(cfgUrl);
 
+        Map<Class<?>, Collection> beans = loadBeans(springCtx, beanClasses);
+
+        return F.t(beans, new GridSpringResourceContextImpl(springCtx));
+    }
+
+    /** {@inheritDoc} */
+    @Override public GridTuple3<Map<String, ?>, Map<Class<?>, Collection>, ? extends GridSpringResourceContext> loadBeans(
+        URL cfgUrl,
+        Collection<String> beanNames,
+        Class<?>... beanClasses
+    ) throws IgniteCheckedException {
+        ApplicationContext springCtx = initContext(cfgUrl);
+
+        Map<String, ?> beansByName = new HashMap<>();
+
+        for (String name : beanNames)
+            beansByName.put(name, loadBean(springCtx, name));
+
+        return F.t(beansByName, loadBeans(springCtx, beanClasses), new GridSpringResourceContextImpl(springCtx));
+    }
+
+    /** Loads bean instances that match the given types. */
+    private Map<Class<?>, Collection> loadBeans(ApplicationContext springCtx, Class<?>... beanClasses) {
         Map<Class<?>, Collection> beans = new HashMap<>();
 
         for (Class<?> cls : beanClasses) {
@@ -160,11 +199,10 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
                 beans.put(cls, clsBeans.values());
         }
 
-        return F.t(beans, new GridSpringResourceContextImpl(springCtx));
+        return beans;
     }
 
     /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
     @Override public <T> T loadBean(URL url, String beanName) throws IgniteCheckedException {
         ApplicationContext springCtx = initContext(url);
 
@@ -182,37 +220,31 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
     }
 
     /** {@inheritDoc} */
-    @SuppressWarnings("unchecked")
     @Override public <T> T loadBean(InputStream cfgStream, String beanName) throws IgniteCheckedException {
         ApplicationContext springCtx = initContext(cfgStream);
 
-        try {
-            return (T)springCtx.getBean(beanName);
-        }
-        catch (NoSuchBeanDefinitionException ignored) {
-            throw new IgniteCheckedException("Spring bean with provided name doesn't exist " +
-                ", beanName=" + beanName + ']');
-        }
-        catch (BeansException e) {
-            throw new IgniteCheckedException("Failed to load Spring bean with provided name " +
-                ", beanName=" + beanName + ']', e);
-        }
+        return loadBean(springCtx, beanName);
     }
 
     /** {@inheritDoc} */
     @Override public <T> T loadBeanFromAppContext(Object appContext, String beanName) throws IgniteCheckedException {
         ApplicationContext springCtx = (ApplicationContext)appContext;
 
+        return loadBean(springCtx, beanName);
+    }
+
+    /** Loads bean instance that match the given name. */
+    private <T> T loadBean(ApplicationContext springCtx, String beanName) throws IgniteCheckedException {
         try {
             return (T)springCtx.getBean(beanName);
         }
         catch (NoSuchBeanDefinitionException ignored) {
-            throw new IgniteCheckedException("Spring bean with provided name doesn't exist " +
-                ", beanName=" + beanName + ']');
+            throw new IgniteCheckedException("Spring bean with provided name doesn't exist [beanName=" +
+                beanName + ']');
         }
         catch (BeansException e) {
-            throw new IgniteCheckedException("Failed to load Spring bean with provided name " +
-                ", beanName=" + beanName + ']', e);
+            throw new IgniteCheckedException("Failed to load Spring bean with provided name [beanName=" +
+                beanName + ']', e);
         }
     }
 
@@ -351,7 +383,7 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
     public static ApplicationContext applicationContext(URL cfgUrl, final String... excludedProps)
         throws IgniteCheckedException {
         try {
-            GenericApplicationContext springCtx = prepareSpringContext(excludedProps);
+            GenericApplicationContext springCtx = prepareSpringContext(true, excludedProps);
 
             new XmlBeanDefinitionReader(springCtx).loadBeanDefinitions(new UrlResource(cfgUrl));
 
@@ -383,8 +415,17 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
      */
     public static ApplicationContext applicationContext(InputStream cfgStream, final String... excludedProps)
         throws IgniteCheckedException {
+        return applicationContext(cfgStream, true, excludedProps);
+    }
+
+    /** */
+    private static ApplicationContext applicationContext(
+        InputStream cfgStream,
+        boolean expEnabled,
+        final String... excludedProps
+    ) throws IgniteCheckedException {
         try {
-            GenericApplicationContext springCtx = prepareSpringContext(excludedProps);
+            GenericApplicationContext springCtx = prepareSpringContext(expEnabled, excludedProps);
 
             XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(springCtx);
 
@@ -409,11 +450,26 @@ public class IgniteSpringHelperImpl implements IgniteSpringHelper {
     /**
      * Prepares Spring context.
      *
+     * @param expEnabled Whether Spring bean expressions enabled.
      * @param excludedProps Properties to be excluded.
      * @return application context.
      */
-    private static GenericApplicationContext prepareSpringContext(final String... excludedProps) {
+    private static GenericApplicationContext prepareSpringContext(boolean expEnabled, final String... excludedProps) {
         GenericApplicationContext springCtx = new GenericApplicationContext();
+
+        if (!expEnabled) {
+            springCtx.addBeanFactoryPostProcessor(factory -> factory.setBeanExpressionResolver((value, evalContext) -> {
+                if (F.isEmpty(value))
+                    return value;
+
+                Expression exp = new SpelExpressionParser().parseExpression(value, TEMPLATE_EXPRESSION);
+
+                if (!(exp instanceof LiteralExpression))
+                    throw new IgniteException("Spring expressions are prohibited.");
+
+                return value;
+            }));
+        }
 
         if (excludedProps.length > 0) {
             final List<String> excludedPropsList = Arrays.asList(excludedProps);

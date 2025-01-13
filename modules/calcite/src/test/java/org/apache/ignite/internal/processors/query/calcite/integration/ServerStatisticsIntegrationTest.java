@@ -25,30 +25,26 @@ import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
-
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.QueryEntity;
 import org.apache.ignite.cache.query.annotations.QuerySqlField;
-import org.apache.ignite.configuration.CacheConfiguration;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.processors.query.QueryEngine;
 import org.apache.ignite.internal.processors.query.calcite.CalciteQueryProcessor;
 import org.apache.ignite.internal.processors.query.calcite.QueryChecker;
 import org.apache.ignite.internal.processors.query.calcite.util.Commons;
-import org.apache.ignite.internal.processors.query.h2.IgniteH2Indexing;
-import org.apache.ignite.internal.processors.query.stat.IgniteStatisticsManager;
 import org.apache.ignite.internal.processors.query.stat.StatisticsKey;
-import org.apache.ignite.internal.processors.query.stat.StatisticsTarget;
-import org.apache.ignite.internal.processors.query.stat.config.StatisticsObjectConfiguration;
 import org.apache.ignite.internal.util.typedef.F;
+import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.junit.Test;
 
 /**
  * Tests for server side statistics usage.
  */
-public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTest {
+public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTransactionalTest {
     /** Server instance. */
     private IgniteEx srv;
 
@@ -90,10 +86,15 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
     };
 
     /** {@inheritDoc} */
-    @Override protected void beforeTestsStarted() throws Exception {
-        super.beforeTestsStarted();
+    @Override protected void init() throws Exception {
+        super.init();
 
-        createAndPopulateAllTypesTable(0, ROW_COUNT);
+        createAllTypesTable();
+
+        createAndPopulateTable(grid(0), 2, CacheMode.PARTITIONED);
+
+        populateAllTypesTable(0, ROW_COUNT);
+
     }
 
     /** {@inheritDoc} */
@@ -116,8 +117,6 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
     public void testQueryCostWithStatistics() throws IgniteCheckedException {
         String sql = "select name from person where salary is not null";
 
-        createAndPopulateTable();
-
         StatisticsKey key = new StatisticsKey("PUBLIC", "PERSON");
         srv = ignite(0);
 
@@ -125,11 +124,11 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
 
         clearQryCache(srv);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         assertQuerySrv(sql).matches(QueryChecker.containsResultRowCount(5)).check();
 
-        statMgr(srv).dropStatistics(new StatisticsTarget(key));
+        dropStatistics(key);
         clearQryCache(srv);
 
         assertQuerySrv(sql).matches(QueryChecker.containsResultRowCount(4.5)).check();
@@ -143,7 +142,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         String sql = "select * from all_types ";
 
@@ -174,7 +173,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         Set<String> nonNullableFields = new HashSet<>(Arrays.asList(NON_NULLABLE_FIELDS));
 
@@ -208,7 +207,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         Set<String> nonNullableFields = new HashSet<>(Arrays.asList(NON_NULLABLE_FIELDS));
 
@@ -267,7 +266,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         String sql = "select %s, %s from all_types where %s < " + ROW_COUNT;
 
@@ -313,7 +312,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         Set<String> nonNullableFields = new HashSet<>(Arrays.asList(NON_NULLABLE_FIELDS));
 
@@ -346,7 +345,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         Set<String> nonNullableFields = new HashSet<>(Arrays.asList(NON_NULLABLE_FIELDS));
 
@@ -381,7 +380,7 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
         StatisticsKey key = new StatisticsKey("PUBLIC", "ALL_TYPES");
         srv = ignite(0);
 
-        collectStatistics(srv, key);
+        collectStatistics(key);
 
         // time
         String timeSql = "select * from all_types where time_field > '00:00:00'";
@@ -421,6 +420,18 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
     }
 
     /**
+     * Check planning with large table size.
+     */
+    @Test
+    public void testSizeIntOverflow() {
+        F.first(grid(0).context().cache().cache(TABLE_NAME).context().offheap().cacheDataStores())
+            .updateSize(CU.cacheId(TABLE_NAME), 1L + Integer.MAX_VALUE);
+
+        assertQuery(grid(0), "select * from person")
+            .matches(QueryChecker.containsTableScan("PUBLIC", "PERSON")).check();
+    }
+
+    /**
      * Clear query cache in specified node.
      *
      * @param ign Ignite node to clear calcite query cache on.
@@ -435,33 +446,32 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
     /**
      * Collect statistics by speicifed key on specified node.
      *
-     * @param ign Node to collect statistics on.
      * @param key Statistics key to collect statistics by.
      * @throws IgniteCheckedException In case of errors.
      */
-    protected void collectStatistics(IgniteEx ign, StatisticsKey key) throws IgniteCheckedException {
-        IgniteStatisticsManager statMgr = statMgr(ign);
+    protected void collectStatistics(StatisticsKey key) throws IgniteCheckedException {
+        executeSql(grid(0), String.format("ANALYZE %s.%s", key.schema(), key.obj()));
 
-        statMgr.collectStatistics(new StatisticsObjectConfiguration(key));
-
-        assertTrue(GridTestUtils.waitForCondition(() -> statMgr.getLocalStatistics(key) != null, 1000));
+        assertTrue(
+            GridTestUtils.waitForCondition(
+                () -> !F.isEmpty(sql(srv, "select * from sys.statistics_local_data where name = ?", key.obj())),
+                1000
+            )
+        );
     }
 
     /**
-     * Get statistics manager.
+     * Drop statistics for specified key.
      *
-     * @param ign Node to get statistics manager from.
-     * @return IgniteStatisticsManager.
+     * @param key Statistics key to collect statistics for.
      */
-    protected IgniteStatisticsManager statMgr(IgniteEx ign) {
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ign.context().query().getIndexing();
-
-        return indexing.statsManager();
+    protected void dropStatistics(StatisticsKey key) {
+        executeSql(grid(0), String.format("DROP STATISTICS %s.%s", key.schema(), key.obj()));
     }
 
     /** */
     protected QueryChecker assertQuerySrv(String qry) {
-        return new QueryChecker(qry) {
+        return new QueryChecker(qry, tx, sqlTxMode) {
             @Override protected QueryEngine getEngine() {
                 return Commons.lookupComponent(srv.context(), QueryEngine.class);
             }
@@ -475,21 +485,26 @@ public class ServerStatisticsIntegrationTest extends AbstractBasicIntegrationTes
      * @param count Rows count.
      * @return Populated cache.
      */
-    protected IgniteCache<Integer, AllTypes> createAndPopulateAllTypesTable(int start, int count) {
-        IgniteCache<Integer, AllTypes> all_types = grid(0).getOrCreateCache(new CacheConfiguration<Integer, AllTypes>()
+    protected IgniteCache<Integer, AllTypes> populateAllTypesTable(int start, int count) {
+        IgniteCache<Integer, AllTypes> all_types = grid(0).cache("all_types");
+
+        for (int i = start; i < start + count; i++) {
+            boolean null_values = (i & 3) == 1;
+
+            put(grid(0), all_types, i, new AllTypes(i, null_values));
+        }
+
+        return all_types;
+    }
+
+    /** */
+    private void createAllTypesTable() {
+        grid(0).getOrCreateCache(this.<Integer, AllTypes>cacheConfiguration()
             .setName("all_types")
             .setSqlSchema("PUBLIC")
             .setQueryEntities(F.asList(new QueryEntity(Integer.class, AllTypes.class).setTableName("all_types")))
             .setBackups(2)
         );
-
-        for (int i = start; i < start + count; i++) {
-            boolean null_values = (i & 3) == 1;
-
-            all_types.put(i, new AllTypes(i, null_values));
-        }
-
-        return all_types;
     }
 
     /**

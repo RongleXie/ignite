@@ -39,6 +39,7 @@ import org.apache.ignite.internal.processors.cache.CacheObjectValueContext;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.IncompleteCacheObject;
 import org.apache.ignite.internal.processors.cache.KeyCacheObject;
+import org.apache.ignite.internal.processors.cache.binary.BinaryMetadataUpdatedListener;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -318,6 +319,15 @@ public interface IgniteCacheObjectProcessor extends GridProcessor {
     public void updateMetadata(File metadataDir, BooleanSupplier stopChecker) throws IgniteCheckedException;
 
     /**
+     * Merge the binary metadata file stored in the specified directory.
+     *
+     * @param metadataDir Directory containing binary metadata files.
+     * @param typeId Type id to update.
+     * @throws IgniteCheckedException If failed.
+     */
+    public void cacheMetadataLocally(File metadataDir, int typeId) throws IgniteCheckedException;
+
+    /**
      * @param typeName Type name.
      * @param ord ordinal.
      * @return Enum object.
@@ -368,4 +378,11 @@ public interface IgniteCacheObjectProcessor extends GridProcessor {
      * @throws org.apache.ignite.binary.BinaryObjectException In case of error.
      */
     public BinaryType registerClass(Class<?> cls) throws BinaryObjectException;
+
+    /**
+     * Add binary metadata update listener.
+     *
+     * @param lsnr Listener.
+     */
+    public void addBinaryMetadataUpdateListener(BinaryMetadataUpdatedListener lsnr);
 }

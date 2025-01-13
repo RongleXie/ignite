@@ -43,6 +43,7 @@ import org.apache.ignite.internal.processors.job.ComputeJobStatusEnum;
 import org.apache.ignite.internal.processors.job.GridJobProcessor;
 import org.apache.ignite.internal.processors.task.GridTaskProcessor;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
+import org.apache.ignite.internal.util.lang.ConsumerX;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.G;
 import org.apache.ignite.internal.util.typedef.internal.U;
@@ -91,6 +92,9 @@ public class ComputeJobStatusTest extends GridCommonAbstractTest {
 
         node0 = crd;
         node1 = grid(1);
+
+        // We are changing it because compute jobs fall asleep.
+        assertTrue(computeJobWorkerInterruptTimeout(node0).propagate(10L));
     }
 
     /** {@inheritDoc} */
@@ -258,6 +262,9 @@ public class ComputeJobStatusTest extends GridCommonAbstractTest {
             U.sleep(100);
 
             checkTaskJobStatuses(sesId, FINISHED, null);
+
+            // Let's wait a bit for the callcc (above) to complete.
+            U.sleep(100);
         }
 
         // Let's check that the job (WaitJob) on the node0 has finished
@@ -366,12 +373,6 @@ public class ComputeJobStatusTest extends GridCommonAbstractTest {
         static PriorityQueueCollisionSpiEx spiEx(Ignite n) {
             return ((PriorityQueueCollisionSpiEx)n.configuration().getCollisionSpi());
         }
-    }
-
-    /** */
-    private interface ConsumerX<T> {
-        /** */
-        void accept(T t) throws Exception;
     }
 
     /** */

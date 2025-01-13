@@ -34,11 +34,13 @@ import org.apache.ignite.internal.client.GridClientConfiguration;
 import org.apache.ignite.internal.client.GridClientFactory;
 import org.apache.ignite.internal.client.GridClientProtocol;
 import org.apache.ignite.internal.client.balancer.GridClientRoundRobinBalancer;
+import org.apache.ignite.internal.management.SystemViewCommandArg;
+import org.apache.ignite.internal.management.SystemViewTask;
 import org.apache.ignite.internal.visor.VisorTaskArgument;
-import org.apache.ignite.internal.visor.node.VisorNodePingTask;
-import org.apache.ignite.internal.visor.node.VisorNodePingTaskArg;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.junit.Test;
+
+import static org.apache.ignite.internal.processors.cache.ClusterCachesInfo.CACHES_VIEW;
 
 /**
  * Tests that node will start with custom binary serializer and thin client will connect to such node.
@@ -49,8 +51,6 @@ public class BinaryConfigurationCustomSerializerSelfTest extends GridCommonAbstr
         IgniteConfiguration cfg = super.getConfiguration(gridName);
 
         cfg.setConnectorConfiguration(new ConnectorConfiguration());
-
-        cfg.setMarshaller(new BinaryMarshaller());
 
         BinaryConfiguration binaryCfg = new BinaryConfiguration();
 
@@ -103,8 +103,12 @@ public class BinaryConfigurationCustomSerializerSelfTest extends GridCommonAbstr
         GridClient client = GridClientFactory.start(clnCfg);
 
         // Execute some task.
-        client.compute().execute(VisorNodePingTask.class.getName(),
-            new VisorTaskArgument<>(nid, new VisorNodePingTaskArg(nid), false));
+        SystemViewCommandArg arg = new SystemViewCommandArg();
+
+        arg.systemViewName(CACHES_VIEW);
+
+        client.compute().execute(SystemViewTask.class.getName(),
+            new VisorTaskArgument<>(nid, arg, false));
 
         GridClientFactory.stop(client.id(), false);
     }

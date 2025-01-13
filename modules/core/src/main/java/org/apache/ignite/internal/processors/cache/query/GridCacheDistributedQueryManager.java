@@ -55,7 +55,6 @@ import org.apache.ignite.lang.IgniteFuture;
 import org.apache.ignite.lang.IgniteReducer;
 import org.jetbrains.annotations.Nullable;
 
-import static org.apache.ignite.cache.CacheMode.LOCAL;
 import static org.apache.ignite.events.EventType.EVT_NODE_FAILED;
 import static org.apache.ignite.events.EventType.EVT_NODE_LEFT;
 import static org.apache.ignite.internal.GridTopic.TOPIC_CACHE;
@@ -100,28 +99,27 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
     };
 
     /** Event listener. */
-    private GridLocalEventListener lsnr;
+    private GridLocalEventListener lsnr = new GridLocalEventListener() {
+        /** {@inheritDoc} */
+        @Override public void onEvent(Event evt) {
+            DiscoveryEvent discoEvt = (DiscoveryEvent)evt;
+
+            for (GridCacheDistributedQueryFuture fut : futs.values())
+                fut.onNodeLeft(discoEvt.eventNode().id());
+        }
+    };
 
     /** {@inheritDoc} */
-    @Override public void start0() throws IgniteCheckedException {
-        super.start0();
+    @Override public void onKernalStart0() throws IgniteCheckedException {
+        super.onKernalStart0();
 
-        assert cctx.config().getCacheMode() != LOCAL;
+        assert !cctx.isRecoveryMode() : "Registering message handlers in recovery mode [cacheName=" + cctx.name() + ']';
 
-        cctx.io().addCacheHandler(cctx.cacheId(), GridCacheQueryRequest.class, new CI2<UUID, GridCacheQueryRequest>() {
-            @Override public void apply(UUID nodeId, GridCacheQueryRequest req) {
-                processQueryRequest(nodeId, req);
-            }
-        });
-
-        lsnr = new GridLocalEventListener() {
-            @Override public void onEvent(Event evt) {
-                DiscoveryEvent discoEvt = (DiscoveryEvent)evt;
-
-                for (GridCacheDistributedQueryFuture fut : futs.values())
-                    fut.onNodeLeft(discoEvt.eventNode().id());
-            }
-        };
+        cctx.io().addCacheHandler(
+            cctx.cacheId(),
+            cctx.startTopologyVersion(),
+            GridCacheQueryRequest.class,
+            (CI2<UUID, GridCacheQueryRequest>)this::processQueryRequest);
 
         cctx.events().addListener(lsnr, EVT_NODE_LEFT, EVT_NODE_FAILED);
     }
@@ -181,9 +179,6 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
      * @param req Query request.
      */
     @Override public void processQueryRequest(UUID sndId, GridCacheQueryRequest req) {
-        assert req.mvccSnapshot() != null || !cctx.mvccEnabled() || req.cancel() ||
-            (req.type() == null && !req.fields()) : req; // Last assertion means next page request.
-
         if (req.cancel()) {
             cancelIds.add(new CancelMessageId(req.id(), sndId));
 
@@ -249,8 +244,8 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
         if (sndNode == null)
             return null;
 
-        GridCacheQueryAdapter<?> qry =
-            new GridCacheQueryAdapter<>(
+        CacheQuery<?> qry =
+            new CacheQuery<>(
                 cctx,
                 req.type(),
                 log,
@@ -268,8 +263,8 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
                 req.includeMetaData(),
                 req.keepBinary(),
                 req.taskHash(),
-                req.mvccSnapshot(),
-                req.isDataPageScanEnabled()
+                req.isDataPageScanEnabled(),
+                req.skipKeys()
             );
 
         return new GridCacheQueryInfo(
@@ -504,8 +499,6 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
 
     /** */
     private CacheQueryFuture<?> queryDistributed(GridCacheQueryBean qry, final Collection<ClusterNode> nodes, boolean fields) {
-        assert cctx.config().getCacheMode() != LOCAL;
-
         if (log.isDebugEnabled())
             log.debug("Executing distributed query: " + qry);
 
@@ -549,16 +542,11 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
 
     /** {@inheritDoc} */
     @SuppressWarnings({"unchecked"})
-    @Override public GridCloseableIterator scanQueryDistributed(final GridCacheQueryAdapter qry,
+    @Override public GridCloseableIterator scanQueryDistributed(final CacheQuery qry,
         Collection<ClusterNode> nodes) throws IgniteCheckedException {
-        assert !cctx.isLocal() : cctx.name();
         assert qry.type() == GridCacheQueryType.SCAN : qry;
-        assert qry.mvccSnapshot() != null || !cctx.mvccEnabled();
 
         boolean performanceStatsEnabled = cctx.kernalContext().performanceStatistics().enabled();
-
-        long startTime = performanceStatsEnabled ? System.currentTimeMillis() : 0;
-        long startTimeNanos = performanceStatsEnabled ? System.nanoTime() : 0;
 
         GridCloseableIterator locIter0 = null;
 
@@ -619,7 +607,8 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
                         if (locIter.hasNextX())
                             cur = locIter.nextX();
 
-                    } finally {
+                    }
+                    finally {
                         if (performanceStatsEnabled) {
                             IoStatisticsHolder stat = IoStatisticsQueryHelper.finishGatheringQueryStatistics();
 
@@ -654,23 +643,13 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
                 if (fut != null)
                     fut.cancel();
 
-                if (performanceStatsEnabled) {
-                    cctx.kernalContext().performanceStatistics().query(
+                if (performanceStatsEnabled && (logicalReads > 0 || physicalReads > 0)) {
+                    cctx.kernalContext().performanceStatistics().queryReads(
                         SCAN,
-                        cctx.name(),
+                        cctx.localNodeId(),
                         ((GridCacheDistributedQueryFuture)fut).requestId(),
-                        startTime,
-                        System.nanoTime() - startTimeNanos,
-                        true);
-
-                    if (logicalReads > 0 || physicalReads > 0) {
-                        cctx.kernalContext().performanceStatistics().queryReads(
-                            SCAN,
-                            cctx.localNodeId(),
-                            ((GridCacheDistributedQueryFuture)fut).requestId(),
-                            logicalReads,
-                            physicalReads);
-                    }
+                        logicalReads,
+                        physicalReads);
                 }
             }
         };
@@ -678,8 +657,6 @@ public class GridCacheDistributedQueryManager<K, V> extends GridCacheQueryManage
 
     /** {@inheritDoc} */
     @Override public CacheQueryFuture<?> queryFieldsLocal(GridCacheQueryBean qry) {
-        assert cctx.config().getCacheMode() != LOCAL;
-
         if (log.isDebugEnabled())
             log.debug("Executing query on local node: " + qry);
 

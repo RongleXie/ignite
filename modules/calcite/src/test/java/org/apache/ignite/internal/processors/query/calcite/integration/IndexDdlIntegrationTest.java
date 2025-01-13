@@ -17,6 +17,7 @@
 package org.apache.ignite.internal.processors.query.calcite.integration;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import org.apache.ignite.internal.IgniteEx;
@@ -24,7 +25,6 @@ import org.apache.ignite.internal.cache.query.index.Index;
 import org.apache.ignite.internal.cache.query.index.SortOrder;
 import org.apache.ignite.internal.cache.query.index.sorted.IndexKeyDefinition;
 import org.apache.ignite.internal.cache.query.index.sorted.inline.InlineIndex;
-import org.apache.ignite.internal.processors.cache.IgniteInternalCache;
 import org.apache.ignite.internal.processors.query.IgniteSQLException;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.lang.IgnitePredicate;
@@ -55,6 +55,12 @@ public class IndexDdlIntegrationTest extends AbstractDdlIntegrationTest {
         sql("drop index my_index");
 
         assertNull(findIndex(CACHE_NAME, "my_index"));
+
+        int cnt = indexes(CACHE_NAME).size();
+
+        sql("create index on my_table(val_int)");
+
+        assertEquals(cnt + 1, indexes(CACHE_NAME).size());
     }
 
     /**
@@ -185,12 +191,14 @@ public class IndexDdlIntegrationTest extends AbstractDdlIntegrationTest {
 
     /** */
     private Index findIndex(String cacheName, String idxName) {
+        return F.find(indexes(cacheName), null, (IgnitePredicate<Index>)i -> idxName.equalsIgnoreCase(i.name()));
+    }
+
+    /** */
+    private Collection<Index> indexes(String cacheName) {
         IgniteEx node = grid(0);
 
-        IgniteInternalCache<?, ?> cache = node.cachex(cacheName);
-
-        return F.find(node.context().indexProcessor().indexes(cache.context()), null,
-            (IgnitePredicate<Index>)i -> idxName.equalsIgnoreCase(i.name()));
+        return node.context().indexProcessor().indexes(cacheName);
     }
 
     /** */

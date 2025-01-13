@@ -27,8 +27,10 @@ from ignitetest.services.utils.ssl.connector_configuration import ConnectorConfi
 from ignitetest.services.utils.ignite_configuration.data_storage import DataStorageConfiguration
 from ignitetest.services.utils.ignite_configuration.discovery import DiscoverySpi, TcpDiscoverySpi
 from ignitetest.services.utils.ignite_configuration.binary_configuration import BinaryConfiguration
+from ignitetest.services.utils.ignite_configuration.transaction import TransactionConfiguration
 from ignitetest.services.utils.ssl.ssl_params import SslParams, is_ssl_enabled, get_ssl_params, IGNITE_CLIENT_ALIAS, \
     IGNITE_SERVER_ALIAS
+from ignitetest.utils.bean import Bean
 from ignitetest.utils.version import IgniteVersion, DEV_BRANCH
 
 
@@ -42,6 +44,7 @@ class IgniteConfiguration(NamedTuple):
     cluster_state: str = 'ACTIVE'
     client_mode: bool = False
     consistent_id: str = None
+    ignite_instance_name: str = None
     failure_detection_timeout: int = 10000
     sys_worker_blocked_timeout: int = 10000
     properties: str = None
@@ -56,7 +59,9 @@ class IgniteConfiguration(NamedTuple):
     plugins: list = []
     ext_beans: list = []
     peer_class_loading_enabled: bool = True
-    metric_exporter: str = None
+    metrics_log_frequency: int = 15000
+    metrics_update_frequency: int = 1000
+    metric_exporters: set = set()
     rebalance_thread_pool_size: int = None
     rebalance_batch_size: int = None
     rebalance_batches_prefetch_count: int = None
@@ -65,8 +70,12 @@ class IgniteConfiguration(NamedTuple):
     include_event_types: list = []
     event_storage_spi: str = None
     log4j_config: str = IgnitePathAware.IGNITE_LOG_CONFIG_NAME
+    sql_schemas: list = []
+    auto_activation_enabled: bool = None
+    transaction_configuration: TransactionConfiguration = None
+    sql_configuration: Bean = None
 
-    def __prepare_ssl(self, test_globals, shared_root):
+    def prepare_ssl(self, test_globals, shared_root):
         """
         Updates ssl configuration from globals.
         """
@@ -78,11 +87,13 @@ class IgniteConfiguration(NamedTuple):
                 IGNITE_CLIENT_ALIAS if self.client_mode else IGNITE_SERVER_ALIAS
             )
         if ssl_params:
+            connector_configuration = self.connector_configuration or ConnectorConfiguration()
+            client_connector_configuration = self.client_connector_configuration or ClientConnectorConfiguration()
             return self._replace(ssl_params=ssl_params,
-                                 connector_configuration=ConnectorConfiguration(ssl_enabled=True,
-                                                                                ssl_params=ssl_params),
-                                 client_connector_configuration=ClientConnectorConfiguration(ssl_enabled=True,
-                                                                                             ssl_params=ssl_params))
+                                 connector_configuration=connector_configuration._replace(
+                                     ssl_enabled=True, ssl_params=ssl_params),
+                                 client_connector_configuration=client_connector_configuration._replace(
+                                     ssl_enabled=True, ssl_params=ssl_params))
         return self
 
     def __prepare_discovery(self, cluster, node):
@@ -103,7 +114,7 @@ class IgniteConfiguration(NamedTuple):
         """
         Updates configuration based on current environment.
         """
-        return self.__prepare_ssl(cluster.globals, cluster.shared_root).__prepare_discovery(cluster, node)
+        return self.__prepare_discovery(cluster, node)
 
     @property
     def service_type(self):
@@ -124,13 +135,15 @@ class IgniteThinClientConfiguration(NamedTuple):
     """
     Thin client configuration.
     """
-    addresses: str = None
+    addresses: list = []
     version: IgniteVersion = DEV_BRANCH
     ssl_params: SslParams = None
     username: str = None
     password: str = None
+    ext_beans: list = []
+    partition_awareness_enabled: bool = None
 
-    def __prepare_ssl(self, test_globals, shared_root):
+    def prepare_ssl(self, test_globals, shared_root):
         """
         Updates ssl configuration from globals.
         """
@@ -145,7 +158,7 @@ class IgniteThinClientConfiguration(NamedTuple):
         """
         Updates configuration based on current environment.
         """
-        return self.__prepare_ssl(cluster.globals, cluster.shared_root)
+        return self
 
     @property
     def service_type(self):
@@ -153,3 +166,35 @@ class IgniteThinClientConfiguration(NamedTuple):
         Application mode.
         """
         return IgniteServiceType.THIN_CLIENT
+
+
+class IgniteThinJdbcConfiguration(NamedTuple):
+    addresses: list = []
+    version: IgniteVersion = DEV_BRANCH
+    ssl_params: SslParams = None
+    username: str = None
+    password: str = None
+
+    def prepare_ssl(self, test_globals, shared_root):
+        """
+        Updates ssl configuration from globals.
+        """
+        ssl_params = None
+        if self.ssl_params is None and is_ssl_enabled(test_globals):
+            ssl_params = get_ssl_params(test_globals, shared_root, IGNITE_CLIENT_ALIAS)
+        if ssl_params:
+            return self._replace(ssl_params=ssl_params)
+        return self
+
+    def prepare_for_env(self, cluster, node):
+        """
+        Updates configuration based on current environment.
+        """
+        return self
+
+    @property
+    def service_type(self):
+        """
+        Application mode.
+        """
+        return IgniteServiceType.THIN_JDBC

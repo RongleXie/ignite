@@ -16,6 +16,7 @@
  */
 package org.apache.ignite.internal.processors.query.calcite.sql.fun;
 
+import org.apache.calcite.sql.fun.SqlInternalOperators;
 import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.util.ReflectiveSqlOperatorTable;
@@ -77,12 +78,20 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         // Aggregates.
         register(SqlStdOperatorTable.COUNT);
         register(SqlStdOperatorTable.SUM);
+        register(SqlStdOperatorTable.SUM0);
         register(SqlStdOperatorTable.AVG);
         register(SqlStdOperatorTable.MIN);
         register(SqlStdOperatorTable.MAX);
         register(SqlStdOperatorTable.ANY_VALUE);
         register(SqlStdOperatorTable.SINGLE_VALUE);
         register(SqlStdOperatorTable.FILTER);
+        register(SqlLibraryOperators.GROUP_CONCAT);
+        register(SqlLibraryOperators.STRING_AGG);
+        register(SqlStdOperatorTable.LISTAGG);
+        register(SqlLibraryOperators.ARRAY_AGG);
+        register(SqlLibraryOperators.ARRAY_CONCAT_AGG);
+        register(SqlStdOperatorTable.EVERY);
+        register(SqlStdOperatorTable.SOME);
 
         // IS ... operator.
         register(SqlStdOperatorTable.IS_NULL);
@@ -149,14 +158,18 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         register(SqlStdOperatorTable.RAND); // Random.
         register(SqlStdOperatorTable.RAND_INTEGER); // Integer random.
         register(SqlStdOperatorTable.ACOS); // Arc cosine.
+        register(SqlLibraryOperators.ACOSH); // Hyperbolic arc cosine.
         register(SqlStdOperatorTable.ASIN); // Arc sine.
+        register(SqlLibraryOperators.ASINH); // Hyperbolic arc sine.
         register(SqlStdOperatorTable.ATAN); // Arc tangent.
         register(SqlStdOperatorTable.ATAN2); // Angle from coordinates.
+        register(SqlLibraryOperators.ATANH); // Hyperbolic arc tangent.
         register(SqlStdOperatorTable.SQRT); // Square root.
         register(SqlStdOperatorTable.CBRT); // Cube root.
         register(SqlStdOperatorTable.COS); // Cosine
         register(SqlLibraryOperators.COSH); // Hyperbolic cosine.
         register(SqlStdOperatorTable.COT); // Cotangent.
+        register(SqlLibraryOperators.COTH); // Hyperbolic cotangent.
         register(SqlStdOperatorTable.DEGREES); // Radians to degrees.
         register(SqlStdOperatorTable.RADIANS); // Degrees to radians.
         register(SqlStdOperatorTable.ROUND);
@@ -165,6 +178,10 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         register(SqlLibraryOperators.SINH); // Hyperbolic sine.
         register(SqlStdOperatorTable.TAN); // Tangent.
         register(SqlLibraryOperators.TANH); // Hyperbolic tangent.
+        register(SqlLibraryOperators.SEC); // Secant.
+        register(SqlLibraryOperators.SECH); // Hyperbolic secant.
+        register(SqlLibraryOperators.CSC); // Cosecant.
+        register(SqlLibraryOperators.CSCH); // Hyperbolic cosecant.
         register(SqlStdOperatorTable.TRUNCATE);
         register(SqlStdOperatorTable.PI);
 
@@ -198,6 +215,11 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         register(SqlLibraryOperators.UNIX_DATE); // Date to days since 1970-01-01.
         register(SqlLibraryOperators.DATE_FROM_UNIX_DATE); // Days since 1970-01-01 to date.
         register(SqlLibraryOperators.DATE); // String to date.
+        register(SqlLibraryOperators.DATETIME); // String to datetime.
+        register(SqlLibraryOperators.TIME); // String to time.
+        register(SqlLibraryOperators.TO_CHAR); // Format date.
+        register(SqlLibraryOperators.TO_DATE); // Parse date.
+        register(SqlLibraryOperators.TO_TIMESTAMP); // Parse timestamp.
 
         // POSIX REGEX.
         register(SqlStdOperatorTable.POSIX_REGEX_CASE_INSENSITIVE);
@@ -214,9 +236,8 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         register(SqlStdOperatorTable.IS_EMPTY);
         register(SqlStdOperatorTable.IS_NOT_EMPTY);
 
-        // TODO https://issues.apache.org/jira/browse/IGNITE-15550
-        //register(SqlStdOperatorTable.MAP_QUERY);
-        //register(SqlStdOperatorTable.ARRAY_QUERY);
+        register(SqlStdOperatorTable.MAP_QUERY);
+        register(SqlStdOperatorTable.ARRAY_QUERY);
 
         // Multiset.
         // TODO https://issues.apache.org/jira/browse/IGNITE-15551
@@ -282,11 +303,19 @@ public class IgniteStdSqlOperatorTable extends ReflectiveSqlOperatorTable {
         register(SqlStdOperatorTable.IS_NOT_JSON_ARRAY);
         register(SqlStdOperatorTable.IS_NOT_JSON_SCALAR);
 
+        // Aggregate functions.
+        register(SqlInternalOperators.LITERAL_AGG); // Internal operator, not implemented, required for serialization.
+
         // Current time functions.
         register(SqlStdOperatorTable.CURRENT_TIME);
         register(SqlStdOperatorTable.CURRENT_TIMESTAMP);
         register(SqlStdOperatorTable.CURRENT_DATE);
         register(SqlStdOperatorTable.LOCALTIME);
         register(SqlStdOperatorTable.LOCALTIMESTAMP);
+
+        // Bit wise operations.
+        register(SqlStdOperatorTable.BIT_AND);
+        register(SqlStdOperatorTable.BIT_OR);
+        register(SqlStdOperatorTable.BIT_XOR);
     }
 }

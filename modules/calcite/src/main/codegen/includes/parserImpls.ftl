@@ -35,7 +35,7 @@ SqlNodeList WithCreateTableOptionList() :
         (
             <QUOTED_IDENTIFIER>
             {
-                return IgniteSqlCreateTable.parseOptionList(
+                return IgniteSqlCreateTableOption.parseOptionList(
                     SqlParserUtil.stripQuotes(token.image, DQ, DQ, DQDQ, quotedCasing),
                     getPos().withQuoting(true)
                 );
@@ -191,6 +191,11 @@ SqlCreate SqlCreateTable(Span s, boolean replace) :
     final SqlNode query;
 }
 {
+    {
+        if (replace)
+            throw SqlUtil.newContextException(getPos(), IgniteResource.INSTANCE.unsupportedClause("REPLACE"));
+    }
+
     <TABLE>
     ifNotExists = IfNotExistsOpt()
     id = CompoundIdentifier()
@@ -251,16 +256,21 @@ SqlNodeList IndexedColumnList() :
 SqlCreate SqlCreateIndex(Span s, boolean replace) :
 {
     final boolean ifNotExists;
-    final SqlIdentifier idxId;
     final SqlIdentifier tblId;
     final SqlNodeList columnList;
+    SqlIdentifier idxId = null;
     SqlNumericLiteral parallel = null;
     SqlNumericLiteral inlineSize = null;
 }
 {
+    {
+        if (replace)
+            throw SqlUtil.newContextException(getPos(), IgniteResource.INSTANCE.unsupportedClause("REPLACE"));
+    }
+
     <INDEX>
     ifNotExists = IfNotExistsOpt()
-    idxId = SimpleIdentifier()
+    [ idxId = SimpleIdentifier() ]
     <ON>
     tblId = CompoundIdentifier()
     columnList = IndexedColumnList()
@@ -412,6 +422,11 @@ SqlCreate SqlCreateUser(Span s, boolean replace) :
     final SqlNode password;
 }
 {
+    {
+        if (replace)
+            throw SqlUtil.newContextException(getPos(), IgniteResource.INSTANCE.unsupportedClause("REPLACE"));
+    }
+
     <USER> user = SimpleIdentifier()
     <WITH> <PASSWORD> password = StringLiteral() {
         return new IgniteSqlCreateUser(s.end(this), user, SqlLiteral.unchain(password));
@@ -584,7 +599,7 @@ SqlNode SqlKillQuery():
 }
 {
     <KILL> { s = span(); } <QUERY>
-    isAsync= IsAsyncOpt()
+    isAsync = IsAsyncOpt()
     <QUOTED_STRING> {
         String rawQueryId = SqlParserUtil.parseString(token.image);
         SqlCharStringLiteral queryIdLiteral = SqlLiteral.createCharString(rawQueryId, getPos());
@@ -613,5 +628,165 @@ SqlNode SqlRollbackTransaction():
 {
     <ROLLBACK> { s = span(); } (<TRANSACTION>)? {
         return new IgniteSqlRollback(s.end(this));
+    }
+}
+
+IgniteSqlStatisticsTable StatisticsTable():
+{
+    final Span s = Span.of();
+    final SqlIdentifier id;
+    final SqlNodeList columnList;
+}
+{
+    id = CompoundIdentifier()
+    (
+        columnList = ParenthesizedSimpleIdentifierList()
+    |
+        { columnList = null; }
+    )
+    {
+        return new IgniteSqlStatisticsTable(id, columnList, s.end(this));
+    }
+}
+
+SqlNodeList StatisticsTables():
+{
+    final Span s = Span.of();
+    List<SqlNode> tbls = new ArrayList<SqlNode>();
+    SqlNode tbl;
+}
+{
+    tbl = StatisticsTable() { tbls.add(tbl); }
+    (
+        <COMMA> tbl = StatisticsTable() { tbls.add(tbl); }
+    )*
+    {
+        return new SqlNodeList(tbls, s.end(this));
+    }
+}
+
+SqlNodeList WithStatisticsAnalyzeOptionList() :
+{
+    List<SqlNode> list = new ArrayList<SqlNode>();
+    final Span s;
+}
+{
+    [
+        <WITH> { s = span(); }
+        (
+            StatisticsAnalyzeOption(list)
+            (
+                <COMMA> { s.add(this); } StatisticsAnalyzeOption(list)
+            )*
+            {
+                return new SqlNodeList(list, s.end(this));
+            }
+        |
+            <QUOTED_IDENTIFIER>
+            {
+                return IgniteSqlStatisticsAnalyzeOption.parseOptionList(
+                    SqlParserUtil.stripQuotes(token.image, DQ, DQ, DQDQ, quotedCasing),
+                    getPos().withQuoting(true)
+                );
+            }
+        )
+    ]
+    { return null; }
+}
+
+SqlLiteral StatisticsAnalyzeOptionKey() :
+{
+}
+{
+    <DISTINCT> { return SqlLiteral.createSymbol(IgniteSqlStatisticsAnalyzeOptionEnum.DISTINCT, getPos()); }
+|
+    <TOTAL> { return SqlLiteral.createSymbol(IgniteSqlStatisticsAnalyzeOptionEnum.TOTAL, getPos()); }
+|
+    <SIZE> { return SqlLiteral.createSymbol(IgniteSqlStatisticsAnalyzeOptionEnum.SIZE, getPos()); }
+|
+    <NULLS> { return SqlLiteral.createSymbol(IgniteSqlStatisticsAnalyzeOptionEnum.NULLS, getPos()); }
+|
+    <MAX_CHANGED_PARTITION_ROWS_PERCENT> { return SqlLiteral.createSymbol(IgniteSqlStatisticsAnalyzeOptionEnum.MAX_CHANGED_PARTITION_ROWS_PERCENT, getPos()); }
+}
+
+void StatisticsAnalyzeOption(List<SqlNode> list) :
+{
+    final Span s;
+    final SqlLiteral key;
+    final SqlNode val;
+}
+{
+    key = StatisticsAnalyzeOptionKey() { s = span(); }
+    <EQ>
+    (
+        val = Literal()
+    |
+        val = SimpleIdentifier()
+    ) {
+        list.add(new IgniteSqlStatisticsAnalyzeOption(key, val, s.end(this)));
+    }
+}
+
+SqlNode SqlStatisticsDrop():
+{
+    final Span s;
+    SqlNodeList tablesList;
+}
+{
+    <DROP> <STATISTICS> { s = span(); }
+    tablesList = StatisticsTables()
+    {
+        return new IgniteSqlStatisticsDrop(tablesList, s.end(this));
+    }
+}
+
+SqlNode SqlStatisticsRefresh():
+{
+    final Span s;
+    SqlNodeList tablesList;
+}
+{
+    <REFRESH> <STATISTICS> { s = span(); }
+    tablesList = StatisticsTables()
+    {
+        return new IgniteSqlStatisticsRefresh(tablesList, s.end(this));
+    }
+}
+
+SqlNode SqlStatisticsAnalyze():
+{
+    final Span s;
+    SqlNodeList tablesList;
+    SqlNodeList optionsList;
+}
+{
+    <ANALYZE> { s = span(); }
+    tablesList = StatisticsTables()
+    optionsList = WithStatisticsAnalyzeOptionList()
+    {
+        return new IgniteSqlStatisticsAnalyze(tablesList, optionsList, s.end(this));
+    }
+}
+
+SqlCreate SqlCreateView(Span s, boolean replace) :
+{
+    final SqlIdentifier id;
+    final SqlNode query;
+}
+{
+    <VIEW> id = CompoundIdentifier()
+    <AS> query = OrderedQueryOrExpr(ExprContext.ACCEPT_QUERY) {
+        return SqlDdlNodes.createView(s.end(this), replace, id, null, query);
+    }
+}
+
+SqlDrop SqlDropView(Span s, boolean replace) :
+{
+    final boolean ifExists;
+    final SqlIdentifier id;
+}
+{
+    <VIEW> ifExists = IfExistsOpt() id = CompoundIdentifier() {
+        return SqlDdlNodes.dropView(s.end(this), ifExists, id);
     }
 }

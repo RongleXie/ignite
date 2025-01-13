@@ -60,7 +60,6 @@ import org.apache.ignite.internal.GridJobSiblingsResponse;
 import org.apache.ignite.internal.GridKernalContext;
 import org.apache.ignite.internal.GridTaskSessionImpl;
 import org.apache.ignite.internal.GridTaskSessionRequest;
-import org.apache.ignite.internal.SkipDaemon;
 import org.apache.ignite.internal.cluster.ClusterTopologyCheckedException;
 import org.apache.ignite.internal.managers.collision.GridCollisionJobContextAdapter;
 import org.apache.ignite.internal.managers.collision.GridCollisionManager;
@@ -74,8 +73,9 @@ import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.distributed.dht.GridReservable;
 import org.apache.ignite.internal.processors.cache.distributed.dht.topology.GridDhtLocalPartition;
+import org.apache.ignite.internal.processors.configuration.distributed.DistributedLongProperty;
 import org.apache.ignite.internal.processors.jobmetrics.GridJobMetricsSnapshot;
-import org.apache.ignite.internal.processors.metric.MetricRegistry;
+import org.apache.ignite.internal.processors.metric.MetricRegistryImpl;
 import org.apache.ignite.internal.processors.metric.impl.AtomicLongMetric;
 import org.apache.ignite.internal.util.GridAtomicLong;
 import org.apache.ignite.internal.util.GridBoundedConcurrentLinkedHashMap;
@@ -87,6 +87,7 @@ import org.apache.ignite.internal.util.typedef.X;
 import org.apache.ignite.internal.util.typedef.internal.LT;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
+import org.apache.ignite.internal.util.worker.GridWorker;
 import org.apache.ignite.lang.IgniteBiTuple;
 import org.apache.ignite.lang.IgnitePredicate;
 import org.apache.ignite.lang.IgniteUuid;
@@ -113,9 +114,11 @@ import static org.apache.ignite.internal.GridTopic.TOPIC_JOB;
 import static org.apache.ignite.internal.GridTopic.TOPIC_JOB_CANCEL;
 import static org.apache.ignite.internal.GridTopic.TOPIC_JOB_SIBLINGS;
 import static org.apache.ignite.internal.GridTopic.TOPIC_TASK;
+import static org.apache.ignite.internal.cluster.DistributedConfigurationUtils.makeUpdateListener;
 import static org.apache.ignite.internal.managers.communication.GridIoPolicy.MANAGEMENT_POOL;
 import static org.apache.ignite.internal.managers.communication.GridIoPolicy.SYSTEM_POOL;
 import static org.apache.ignite.internal.processors.cache.distributed.dht.topology.GridDhtPartitionState.OWNING;
+import static org.apache.ignite.internal.processors.configuration.distributed.DistributedLongProperty.detachedLongProperty;
 import static org.apache.ignite.internal.processors.metric.GridMetricManager.CPU_LOAD;
 import static org.apache.ignite.internal.processors.metric.GridMetricManager.SYS_METRICS;
 import static org.apache.ignite.internal.processors.metric.impl.MetricUtils.metricName;
@@ -125,7 +128,6 @@ import static org.jsr166.ConcurrentLinkedHashMap.QueuePolicy.PER_SEGMENT_Q;
 /**
  * Responsible for all grid job execution and communication.
  */
-@SkipDaemon
 public class GridJobProcessor extends GridProcessorAdapter {
     /** */
     public static final String JOBS_VIEW = "jobs";
@@ -166,11 +168,20 @@ public class GridJobProcessor extends GridProcessorAdapter {
     /** Total jobs waiting time metric name. */
     public static final String WAITING_TIME = "WaitingTime";
 
+    /**
+     * Distributed property that defines the timeout for interrupting the
+     * {@link GridJobWorker worker} after {@link GridJobWorker#cancel() cancellation} in mills.
+     */
+    public static final String COMPUTE_JOB_WORKER_INTERRUPT_TIMEOUT = "computeJobWorkerInterruptTimeout";
+
     /** */
     private final Marshaller marsh;
 
     /** Collision SPI is not available: {@link GridCollisionManager#enabled()} {@code == false}. */
     private final boolean jobAlwaysActivate;
+
+    /** */
+    private volatile ConcurrentMap<IgniteUuid, GridJobWorker> syncRunningJobs;
 
     /** */
     private volatile ConcurrentMap<IgniteUuid, GridJobWorker> activeJobs;
@@ -312,6 +323,11 @@ public class GridJobProcessor extends GridProcessorAdapter {
      */
     @Nullable private final String jobPriAttrKey;
 
+    /** Timeout interrupt {@link GridJobWorker workers} after {@link GridJobWorker#cancel cancel} im mills. */
+    private final DistributedLongProperty computeJobWorkerInterruptTimeout =
+        detachedLongProperty(COMPUTE_JOB_WORKER_INTERRUPT_TIMEOUT,
+            "The timeout in milliseconds for interrupting the a job worker after a cancel operation is called.");
+
     /**
      * @param ctx Kernal context.
      */
@@ -325,6 +341,8 @@ public class GridJobProcessor extends GridProcessorAdapter {
 
         metricsUpdateFreq = ctx.config().getMetricsUpdateFrequency();
 
+        syncRunningJobs = new ConcurrentHashMap<>();
+
         activeJobs = initJobsMap(jobAlwaysActivate);
 
         passiveJobs = jobAlwaysActivate ? null : new JobsMap(1024, 0.75f, 256);
@@ -336,7 +354,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
 
         cpuLoadMetric = ctx.metric().registry(SYS_METRICS).findMetric(CPU_LOAD);
 
-        MetricRegistry mreg = ctx.metric().registry(JOBS_METRICS);
+        MetricRegistryImpl mreg = ctx.metric().registry(JOBS_METRICS);
 
         startedJobsMetric = mreg.longMetric(STARTED, "Number of started jobs.");
 
@@ -358,11 +376,11 @@ public class GridJobProcessor extends GridProcessorAdapter {
         ctx.systemView().registerInnerCollectionView(JOBS_VIEW, JOBS_VIEW_DESC,
             new ComputeJobViewWalker(),
             passiveJobs == null ?
-                Arrays.asList(activeJobs, cancelledJobs) :
-                Arrays.asList(activeJobs, passiveJobs, cancelledJobs),
+                Arrays.asList(activeJobs, syncRunningJobs, cancelledJobs) :
+                Arrays.asList(activeJobs, syncRunningJobs, passiveJobs, cancelledJobs),
             ConcurrentMap::entrySet,
             (map, e) -> {
-                ComputeJobState state = map == activeJobs ? ComputeJobState.ACTIVE :
+                ComputeJobState state = (map == activeJobs || map == syncRunningJobs) ? ComputeJobState.ACTIVE :
                     (map == passiveJobs ? ComputeJobState.PASSIVE : ComputeJobState.CANCELED);
 
                 return new ComputeJobView(e.getKey(), e.getValue(), state);
@@ -378,6 +396,15 @@ public class GridJobProcessor extends GridProcessorAdapter {
             taskPriAttrKey = null;
             jobPriAttrKey = null;
         }
+
+        ctx.internalSubscriptionProcessor().registerDistributedConfigurationListener(dispatcher -> {
+            computeJobWorkerInterruptTimeout.addListener(makeUpdateListener(
+                "Compute job parameter '%s' was changed from '%s' to '%s'",
+                log
+            ));
+
+            dispatcher.registerProperty(computeJobWorkerInterruptTimeout);
+        });
     }
 
     /** {@inheritDoc} */
@@ -406,6 +433,8 @@ public class GridJobProcessor extends GridProcessorAdapter {
     /** {@inheritDoc} */
     @Override public void stop(boolean cancel) {
         // Clear collections.
+        syncRunningJobs = new ConcurrentHashMap<>();
+
         activeJobs = initJobsMap(jobAlwaysActivate);
 
         activeJobsMetric.reset();
@@ -776,9 +805,15 @@ public class GridJobProcessor extends GridProcessorAdapter {
                             cancelPassiveJob(job);
                     }
                 }
+
                 for (GridJobWorker job : activeJobs.values()) {
                     if (idsMatch.test(job))
                         cancelActiveJob(job, sys);
+                }
+
+                for (GridJobWorker job : syncRunningJobs.values()) {
+                    if (idsMatch.test(job))
+                        cancelJob(job, sys);
                 }
             }
             else {
@@ -791,8 +826,16 @@ public class GridJobProcessor extends GridProcessorAdapter {
 
                 GridJobWorker activeJob = activeJobs.get(jobId);
 
-                if (activeJob != null && idsMatch.test(activeJob))
+                if (activeJob != null && idsMatch.test(activeJob)) {
                     cancelActiveJob(activeJob, sys);
+
+                    return;
+                }
+
+                activeJob = syncRunningJobs.get(jobId);
+
+                if (activeJob != null && idsMatch.test(activeJob))
+                    cancelJob(activeJob, sys);
             }
         }
         finally {
@@ -878,7 +921,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
      * In most cases this method should be called from main read lock
      * to avoid jobs activation after node stop has started.
      */
-    private void handleCollisions() {
+    public void handleCollisions() {
         assert !jobAlwaysActivate;
 
         if (handlingCollision.get()) {
@@ -1262,10 +1305,10 @@ public class GridJobProcessor extends GridProcessorAdapter {
                                     U.resolveClassLoader(dep.classLoader(), ctx.config()));
                         }
 
-                        IgnitePredicate<ClusterNode> topologyPred = req.getTopologyPredicate();
+                        IgnitePredicate<ClusterNode> topPred = req.getTopologyPredicate();
 
-                        if (topologyPred == null && req.getTopologyPredicateBytes() != null) {
-                            topologyPred = U.unmarshal(marsh, req.getTopologyPredicateBytes(),
+                        if (topPred == null && req.getTopologyPredicateBytes() != null) {
+                            topPred = U.unmarshal(marsh, req.getTopologyPredicateBytes(),
                                 U.resolveClassLoader(dep.classLoader(), ctx.config()));
                         }
 
@@ -1277,7 +1320,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
                             dep,
                             req.getTaskClassName(),
                             req.topology(),
-                            topologyPred,
+                            topPred,
                             req.getStartTaskTime(),
                             endTime,
                             siblings,
@@ -1285,7 +1328,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
                             req.isSessionFullSupport(),
                             req.isInternal(),
                             req.executorName(),
-                            ctx.security().enabled() ? ctx.security().securityContext().subject().login() : null
+                            ctx.security().securityContext()
                         );
 
                         taskSes.setCheckpointSpi(req.getCheckpointSpi());
@@ -1327,7 +1370,9 @@ public class GridJobProcessor extends GridProcessorAdapter {
                         holdLsnr,
                         partsReservation,
                         req.getTopVer(),
-                        req.executorName());
+                        req.executorName(),
+                        this::computeJobWorkerInterruptTimeout
+                    );
 
                     jobCtx.job(job);
 
@@ -1340,7 +1385,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
                             // This is an internal job and can be executed inside busy lock
                             // since job is expected to be short.
                             // This is essential for proper stop without races.
-                            job.run();
+                            runSync(job);
 
                             // No execution outside lock.
                             job = null;
@@ -1418,6 +1463,23 @@ public class GridJobProcessor extends GridProcessorAdapter {
     }
 
     /**
+     * Adds job to {@link #syncRunningJobs} while run to provide info in system view.
+     * @param job Job to add in system view and run synchronously.
+     */
+    private void runSync(GridJobWorker job) {
+        IgniteUuid jobId = job.getJobId();
+
+        syncRunningJobs.put(jobId, job);
+
+        try {
+            job.run();
+        }
+        finally {
+            syncRunningJobs.remove(jobId);
+        }
+    }
+
+    /**
      * Callback from job worker to set current task session for execution.
      *
      * @param ses Session.
@@ -1460,12 +1522,12 @@ public class GridJobProcessor extends GridProcessorAdapter {
      * @return Deployment.
      */
     public GridDeployment currentDeployment() {
-        GridJobSessionImpl session = currSess.get();
+        GridJobSessionImpl ses = currSess.get();
 
-        if (session == null || session.deployment() == null)
+        if (ses == null || ses.deployment() == null)
             return null;
 
-        return session.deployment();
+        return ses.deployment();
     }
 
     /**
@@ -1814,7 +1876,7 @@ public class GridJobProcessor extends GridProcessorAdapter {
                     if (!cctx.started()) // Cache not started.
                         return reserved;
 
-                    if (cctx.isLocal() || !cctx.rebalanceEnabled())
+                    if (!cctx.rebalanceEnabled())
                         continue;
 
                     boolean checkPartMapping = false;
@@ -2413,5 +2475,12 @@ public class GridJobProcessor extends GridProcessorAdapter {
             return w -> sesId.equals(w.getSession().getId());
         else
             return w -> sesId.equals(w.getSession().getId()) && jobId.equals(w.getJobId());
+    }
+
+    /**
+     * @return Interruption timeout of {@link GridJobWorker workers} (in millis) after {@link GridWorker#cancel cancel} is called.
+     */
+    public long computeJobWorkerInterruptTimeout() {
+        return computeJobWorkerInterruptTimeout.getOrDefault(ctx.config().getFailureDetectionTimeout());
     }
 }

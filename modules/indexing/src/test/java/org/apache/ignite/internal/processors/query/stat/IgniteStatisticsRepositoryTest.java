@@ -17,10 +17,10 @@
 
 package org.apache.ignite.internal.processors.query.stat;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.internal.managers.systemview.GridSystemViewManager;
@@ -33,7 +33,6 @@ import org.apache.ignite.internal.util.collection.IntMap;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.logger.GridTestLog4jLogger;
-import org.h2.value.ValueInt;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -55,7 +54,7 @@ public class IgniteStatisticsRepositoryTest extends StatisticsAbstractTest {
         0, new byte[0], 0, U.currentTimeMillis());
 
     /** Column statistics with 100 integers 0-100. */
-    protected ColumnStatistics cs2 = new ColumnStatistics(ValueInt.get(0), ValueInt.get(100), 0, 100, 100,
+    protected ColumnStatistics cs2 = new ColumnStatistics(new BigDecimal(0), new BigDecimal(100), 0, 100, 100,
         4, new byte[0], 0, U.currentTimeMillis());
 
     /** Column statistics with 0 rows. */
@@ -63,7 +62,7 @@ public class IgniteStatisticsRepositoryTest extends StatisticsAbstractTest {
         new byte[0], 0, U.currentTimeMillis());
 
     /** Column statistics with 100 integers 0-10. */
-    protected ColumnStatistics cs4 = new ColumnStatistics(ValueInt.get(0), ValueInt.get(10), 0, 10, 100,
+    protected ColumnStatistics cs4 = new ColumnStatistics(new BigDecimal(0), new BigDecimal(10), 0, 10, 100,
         4, new byte[0], 0, U.currentTimeMillis());
 
     /** Persistence enabled flag. */
@@ -93,13 +92,13 @@ public class IgniteStatisticsRepositoryTest extends StatisticsAbstractTest {
         // With persistence
         MetastorageLifecycleListener lsnr[] = new MetastorageLifecycleListener[1];
 
-        GridInternalSubscriptionProcessor subscriptionProcessor = Mockito.mock(GridInternalSubscriptionProcessor.class);
+        GridInternalSubscriptionProcessor subscriptionProc = Mockito.mock(GridInternalSubscriptionProcessor.class);
         Mockito.doAnswer(invocation -> lsnr[0] = invocation.getArgument(0))
-            .when(subscriptionProcessor).registerMetastorageListener(Mockito.any(MetastorageLifecycleListener.class));
+            .when(subscriptionProc).registerMetastorageListener(Mockito.any(MetastorageLifecycleListener.class));
         IgniteCacheDatabaseSharedManager db = Mockito.mock(IgniteCacheDatabaseSharedManager.class);
 
         IgniteStatisticsRepository statsRepos[] = new IgniteStatisticsRepository[1];
-        IgniteStatisticsStore storePersistent = new IgniteStatisticsPersistenceStoreImpl(subscriptionProcessor, db,
+        IgniteStatisticsStore storePersistent = new IgniteStatisticsPersistenceStoreImpl(subscriptionProc, db,
             IgniteStatisticsRepositoryTest::getLogger);
         IgniteStatisticsHelper helper = Mockito.mock(IgniteStatisticsHelper.class);
         statsRepos[0] = new IgniteStatisticsRepository(storePersistent, sysViewMgr, helper,

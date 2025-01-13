@@ -37,6 +37,7 @@ import org.apache.ignite.IgniteLogger;
 import org.apache.ignite.IgniteSystemProperties;
 import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.WALMode;
+import org.apache.ignite.internal.cdc.CdcManager;
 import org.apache.ignite.internal.pagemem.wal.record.CheckpointRecord;
 import org.apache.ignite.internal.pagemem.wal.record.SwitchSegmentRecord;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecord;
@@ -226,11 +227,17 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
 
             SegmentedRingByteBuffer.WriteSegment seg;
 
-            // Buffer can be in open state in case of resuming with different serializer version.
-            if (rec.type() == SWITCH_SEGMENT_RECORD && !resume)
-                seg = buf.offerSafe(rec.size());
-            else
-                seg = buf.offer(rec.size());
+            try {
+                // Buffer can be in open state in case of resuming with different serializer version.
+                if (rec.type() == SWITCH_SEGMENT_RECORD && !resume)
+                    seg = buf.offerSafe(rec.size());
+                else
+                    seg = buf.offer(rec.size());
+            }
+            catch (IgniteException e) {
+                // WAL record size is greater than the buffer's capacity.
+                throw new IgniteCheckedException(e);
+            }
 
             WALPointer ptr = null;
 
@@ -400,14 +407,7 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
                     if (segs != null) {
                         assert segs.size() == 1;
 
-                        SegmentedRingByteBuffer.ReadSegment seg = segs.get(0);
-
-                        int off = seg.buffer().position();
-                        int len = seg.buffer().limit() - off;
-
-                        fsync((MappedByteBuffer)buf.buf, off, len);
-
-                        seg.release();
+                        fsyncReadSegment(segs.get(0), false);
                     }
                 }
                 else
@@ -455,77 +455,65 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
             try {
                 flushOrWait(null);
 
-                try {
-                    RecordSerializer backwardSerializer = new RecordSerializerFactoryImpl(cctx)
-                        .createSerializer(serializerVer);
+                RecordSerializer backwardSerializer = new RecordSerializerFactoryImpl(cctx)
+                    .createSerializer(serializerVer);
 
-                    SwitchSegmentRecord segmentRecord = new SwitchSegmentRecord();
+                SwitchSegmentRecord segmentRecord = new SwitchSegmentRecord();
 
-                    int switchSegmentRecSize = backwardSerializer.size(segmentRecord);
+                int switchSegmentRecSize = backwardSerializer.size(segmentRecord);
 
-                    if (rollOver && written + switchSegmentRecSize < maxWalSegmentSize) {
-                        segmentRecord.size(switchSegmentRecSize);
+                if (rollOver && written + switchSegmentRecSize < maxWalSegmentSize) {
+                    segmentRecord.size(switchSegmentRecSize);
 
-                        WALPointer segRecPtr = addRecord(segmentRecord);
+                    WALPointer segRecPtr = addRecord(segmentRecord);
 
-                        if (segRecPtr != null) {
-                            fsync(segRecPtr);
+                    if (segRecPtr != null) {
+                        fsync(segRecPtr);
 
-                            switchSegmentRecordOffset = segRecPtr.fileOffset() + switchSegmentRecSize;
-                        }
-                        else {
-                            if (log.isDebugEnabled())
-                                log.debug("Not enough space in wal segment to write segment switch");
-                        }
+                        switchSegmentRecordOffset = segRecPtr.fileOffset() + switchSegmentRecSize;
                     }
                     else {
-                        if (log.isDebugEnabled()) {
-                            log.debug("Not enough space in wal segment to write segment switch, written="
-                                + written + ", switchSegmentRecSize=" + switchSegmentRecSize);
-                        }
-                    }
-
-                    // Unconditional flush (tail of the buffer)
-                    flushOrWait(null);
-
-                    if (mmap) {
-                        List<SegmentedRingByteBuffer.ReadSegment> segs = buf.poll(maxWalSegmentSize);
-
-                        if (segs != null) {
-                            assert segs.size() == 1;
-
-                            segs.get(0).release();
-                        }
-                    }
-
-                    // Do the final fsync.
-                    if (mode != WALMode.NONE) {
-                        if (mmap)
-                            ((MappedByteBuffer)buf.buf).force();
-                        else
-                            fileIO.force();
-
-                        lastFsyncPos = written;
-                    }
-
-                    if (mmap) {
-                        try {
-                            fileIO.close();
-                        }
-                        catch (IOException ignore) {
-                            // No-op.
-                        }
-                    }
-                    else {
-                        walWriter.close();
-
-                        if (!rollOver)
-                            buf.free();
+                        if (log.isDebugEnabled())
+                            log.debug("Not enough space in wal segment to write segment switch");
                     }
                 }
-                catch (IOException e) {
-                    throw new StorageException("Failed to close WAL write handle [idx=" + getSegmentId() + "]", e);
+                else {
+                    if (log.isDebugEnabled()) {
+                        log.debug("Not enough space in wal segment to write segment switch, written="
+                            + written + ", switchSegmentRecSize=" + switchSegmentRecSize);
+                    }
                 }
+
+                // Unconditional flush (tail of the buffer)
+                flushOrWait(null);
+
+                if (mmap) {
+                    List<SegmentedRingByteBuffer.ReadSegment> segs = buf.poll(maxWalSegmentSize);
+
+                    if (segs != null) {
+                        assert segs.size() == 1;
+
+                        fsyncReadSegment(segs.get(0), true);
+                    }
+                }
+
+                // Do the final fsync.
+                if (mode != WALMode.NONE) {
+                    if (mmap)
+                        ((MappedByteBuffer)buf.buf).force();
+                    else
+                        walWriter.force();
+
+                    lastFsyncPos = written;
+                }
+
+                if (mmap)
+                    U.closeQuiet(fileIO);
+                else
+                    walWriter.close();
+
+                if (!mmap && !rollOver)
+                    buf.free();
 
                 if (log.isDebugEnabled())
                     log.debug("Closed WAL write handle [idx=" + getSegmentId() + "]");
@@ -541,6 +529,36 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
         }
         else
             return false;
+    }
+
+    /**
+     * Make fsync for part of the WAL segment file. And collect it to {@link CdcManager} if enabled.
+     *
+     * @param seg Part of the WAL segment file.
+     * @param onlyCdc If {@code true} then skip actual fsync. TODO: IGNITE-20732
+     */
+    private void fsyncReadSegment(SegmentedRingByteBuffer.ReadSegment seg, boolean onlyCdc) throws IgniteCheckedException {
+        int off = seg.buffer().position();
+        int len = seg.buffer().limit() - off;
+
+        if (!onlyCdc)
+            fsync((MappedByteBuffer)buf.buf, off, len);
+
+        if (cctx.cdc() != null && cctx.cdc().enabled()) {
+            try {
+                ByteBuffer cdcBuf = buf.buf.asReadOnlyBuffer();
+                cdcBuf.position(off);
+                cdcBuf.limit(off + len);
+                cdcBuf.order(buf.buf.order());
+
+                cctx.cdc().collect(cdcBuf);
+            }
+            catch (Throwable cdcErr) {
+                U.error(log, "Error happened during CDC data collection.", cdcErr);
+            }
+        }
+
+        seg.release();
     }
 
     /**
@@ -620,9 +638,9 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
      * @return FSyncer suitable for the current JRE.
      */
     private static MMapFSyncer pickFsyncer() {
-        int javaVersion = majorJavaVersion(jdkVersion());
+        int javaVer = majorJavaVersion(jdkVersion());
 
-        if (javaVersion >= 15)
+        if (javaVer >= 15)
             return new JDK15FSyncer();
 
         return new LegacyFSyncer();
@@ -676,12 +694,12 @@ class FileWriteHandleImpl extends AbstractFileHandle implements FileWriteHandle 
         @Override public void fsync(MappedByteBuffer buf, int index, int len) throws IgniteCheckedException {
             try {
                 boolean isSync = (boolean)JDK15FSyncer.isSync.get(buf);
-                long address = (long)JDK15FSyncer.address.get(buf);
+                long addr = (long)JDK15FSyncer.address.get(buf);
 
-                assert address % PAGE_SIZE == 0 : "Buffer's address is not aligned: " + address;
+                assert addr % PAGE_SIZE == 0 : "Buffer's address is not aligned: " + addr;
 
                 // Don't need to align manually as MappedMemoryUtils does the alignment
-                force.invoke(mappedMemoryUtils, fd.get(buf), address, isSync, index, len);
+                force.invoke(mappedMemoryUtils, fd.get(buf), addr, isSync, index, len);
             }
             catch (IllegalAccessException | InvocationTargetException e) {
                 throw new IgniteCheckedException(e);

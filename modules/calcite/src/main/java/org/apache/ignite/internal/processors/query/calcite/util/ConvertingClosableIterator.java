@@ -20,14 +20,17 @@ package org.apache.ignite.internal.processors.query.calcite.util;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
 
 import org.apache.ignite.internal.processors.query.calcite.exec.ExecutionContext;
 import org.apache.ignite.internal.processors.query.calcite.exec.RowHandler;
+import org.jetbrains.annotations.Nullable;
 
 /**
  *
  */
-class ConvertingClosableIterator<Row> implements Iterator<List<?>>, AutoCloseable {
+public class ConvertingClosableIterator<Row> implements Iterator<List<?>>, AutoCloseable {
     /** */
     private final Iterator<Row> it;
 
@@ -35,9 +38,30 @@ class ConvertingClosableIterator<Row> implements Iterator<List<?>>, AutoCloseabl
     private final RowHandler<Row> rowHnd;
 
     /** */
-    public ConvertingClosableIterator(Iterator<Row> it, ExecutionContext<Row> ectx) {
+    @Nullable private final Function<Object, Object> fieldConverter;
+
+    /** */
+    @Nullable Function<List<Object>, List<Object>> rowConverter;
+
+    /** */
+    @Nullable Runnable onClose;
+
+    /** */
+    private final AtomicBoolean closed = new AtomicBoolean();
+
+    /** */
+    public ConvertingClosableIterator(
+        Iterator<Row> it,
+        ExecutionContext<Row> ectx,
+        @Nullable Function<Object, Object> fieldConverter,
+        @Nullable Function<List<Object>, List<Object>> rowConverter,
+        @Nullable Runnable onClose
+    ) {
         this.it = it;
         rowHnd = ectx.rowHandler();
+        this.fieldConverter = fieldConverter;
+        this.rowConverter = rowConverter;
+        this.onClose = onClose;
     }
 
     /**
@@ -58,15 +82,20 @@ class ConvertingClosableIterator<Row> implements Iterator<List<?>>, AutoCloseabl
         List<Object> res = new ArrayList<>(rowSize);
 
         for (int i = 0; i < rowSize; i++)
-            res.add(rowHnd.get(i, next));
+            res.add(fieldConverter == null ? rowHnd.get(i, next) : fieldConverter.apply(rowHnd.get(i, next)));
 
-        return res;
+        return rowConverter == null ? res : rowConverter.apply(res);
     }
 
     /**
      * {@inheritDoc}
      */
     @Override public void close() throws Exception {
-        Commons.close(it);
+        if (closed.compareAndSet(false, true)) {
+            Commons.close(it);
+
+            if (onClose != null)
+                onClose.run();
+        }
     }
 }

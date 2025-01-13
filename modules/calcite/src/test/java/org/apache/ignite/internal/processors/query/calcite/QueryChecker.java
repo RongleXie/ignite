@@ -27,18 +27,24 @@ import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
+import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.cache.query.FieldsQueryCursor;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInterruptedCheckedException;
-import org.apache.ignite.internal.processors.cache.distributed.dht.atomic.GridDhtAtomicCache;
+import org.apache.ignite.internal.processors.cache.distributed.dht.GridDhtCacheAdapter;
 import org.apache.ignite.internal.processors.cache.distributed.dht.topology.GridDhtLocalPartition;
+import org.apache.ignite.internal.processors.cache.transactions.TransactionProxyImpl;
+import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
+import org.apache.ignite.internal.processors.query.QueryContext;
 import org.apache.ignite.internal.processors.query.QueryEngine;
+import org.apache.ignite.internal.processors.query.calcite.integration.AbstractBasicIntegrationTransactionalTest.SqlTransactionMode;
+import org.apache.ignite.internal.processors.query.schema.management.SchemaManager;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.G;
 import org.apache.ignite.internal.util.typedef.X;
 import org.apache.ignite.testframework.GridTestUtils;
+import org.apache.ignite.transactions.Transaction;
 import org.hamcrest.CoreMatchers;
 import org.hamcrest.CustomTypeSafeMatcher;
 import org.hamcrest.Matcher;
@@ -87,7 +93,11 @@ public abstract class QueryChecker {
      * @return Matcher.
      */
     public static Matcher<String> containsIndexScan(String schema, String tblName, String idxName) {
-        return containsSubPlan("IgniteIndexScan(table=[[" + schema + ", " + tblName + "]], index=[" + idxName + ']');
+        return CoreMatchers.anyOf(
+            containsSubPlan("IgniteIndexScan(table=[[" + schema + ", " + tblName + "]], index=[" + idxName + ']'),
+            containsSubPlan("IgniteIndexScan(table=[[" + schema + ", " + tblName + "]], index=[" +
+                SchemaManager.generateProxyIdxName(idxName) + ']')
+        );
     }
 
     /**
@@ -97,9 +107,9 @@ public abstract class QueryChecker {
      * @return Mather.
      */
     public static Matcher<String> containsResultRowCount(double rowCount) {
-        String rowCountStr = String.format(".*rowcount = %s,.*", rowCount);
+        String rowCntStr = String.format(".*rowcount = %s,.*", rowCount);
 
-        return new RegexpMather(rowCountStr);
+        return new RegexpMather(rowCntStr);
     }
 
     /**
@@ -268,10 +278,16 @@ public abstract class QueryChecker {
     private final String qry;
 
     /** */
+    private final Transaction tx;
+
+    /** */
     private final ArrayList<Matcher<String>> planMatchers = new ArrayList<>();
 
     /** */
     private List<List<?>> expectedResult;
+
+    /** */
+    private int expectedResultSize = -1;
 
     /** */
     private List<String> expectedColumnNames;
@@ -280,19 +296,41 @@ public abstract class QueryChecker {
     private boolean ordered;
 
     /** */
+    private boolean withRowsIterator;
+
+    /** */
     private Object[] params = X.EMPTY_OBJECT_ARRAY;
 
     /** */
     private String exactPlan;
 
     /** */
+    private FrameworkConfig frameworkCfg;
+
+    /** */
     public QueryChecker(String qry) {
+        this(qry, null, SqlTransactionMode.NONE);
+    }
+
+    /** */
+    public QueryChecker(String qry, Transaction tx, SqlTransactionMode sqlTxMode) {
+        assert (tx != null && sqlTxMode != SqlTransactionMode.NONE)
+            || (tx == null && sqlTxMode == SqlTransactionMode.NONE) : "mode = " + sqlTxMode + ", tx = " + tx;
+
         this.qry = qry;
+        this.tx = tx;
     }
 
     /** */
     public QueryChecker ordered() {
         ordered = true;
+
+        return this;
+    }
+
+    /** */
+    public QueryChecker withRowsIterator(boolean flag) {
+        withRowsIterator = flag;
 
         return this;
     }
@@ -305,11 +343,25 @@ public abstract class QueryChecker {
     }
 
     /** */
+    public QueryChecker withFrameworkConfig(FrameworkConfig frameworkCfg) {
+        this.frameworkCfg = frameworkCfg;
+
+        return this;
+    }
+
+    /** */
     public QueryChecker returns(Object... res) {
         if (expectedResult == null)
             expectedResult = new ArrayList<>();
 
         expectedResult.add(Arrays.asList(res));
+
+        return this;
+    }
+
+    /** */
+    public QueryChecker resultSize(int size) {
+        expectedResultSize = size;
 
         return this;
     }
@@ -345,14 +397,21 @@ public abstract class QueryChecker {
         // Check plan.
         QueryEngine engine = getEngine();
 
+        GridCacheVersion txVer = tx != null
+            ? ((TransactionProxyImpl)tx).tx().xidVersion()
+            : null;
+
+        QueryContext ctx = (frameworkCfg != null || txVer != null) ? QueryContext.of(frameworkCfg, txVer) : null;
+
         List<FieldsQueryCursor<List<?>>> explainCursors =
-            engine.query(null, "PUBLIC", "EXPLAIN PLAN FOR " + qry);
+            engine.query(ctx, "PUBLIC", "EXPLAIN PLAN FOR " + qry, params);
 
         FieldsQueryCursor<List<?>> explainCursor = explainCursors.get(0);
         List<List<?>> explainRes = explainCursor.getAll();
         String actualPlan = (String)explainRes.get(0).get(0);
 
-        if (!F.isEmpty(planMatchers)) {
+        // Will not check plan in transaction, because, statistic not refreshed inside transaction, so plan differs from expected.
+        if (!F.isEmpty(planMatchers) && tx == null) {
             for (Matcher<String> matcher : planMatchers)
                 assertThat("Invalid plan:\n" + actualPlan + "\n for query: " + qry, actualPlan, matcher);
         }
@@ -362,7 +421,7 @@ public abstract class QueryChecker {
 
         // Check result.
         List<FieldsQueryCursor<List<?>>> cursors =
-            engine.query(null, "PUBLIC", qry, params);
+            engine.query(ctx, "PUBLIC", qry, params);
 
         FieldsQueryCursor<List<?>> cur = cursors.get(0);
 
@@ -373,7 +432,17 @@ public abstract class QueryChecker {
             assertThat("Column names don't match", colNames, equalTo(expectedColumnNames));
         }
 
-        List<List<?>> res = cur.getAll();
+        List<List<?>> res;
+        if (withRowsIterator) {
+            res = new ArrayList<>();
+            for (Iterator<List<?>> it = cur.iterator(); it.hasNext(); )
+                res.add(it.next());
+        }
+        else
+            res = cur.getAll();
+
+        if (expectedResultSize >= 0)
+            assertEquals("Unexpected result size", expectedResultSize, res.size());
 
         if (expectedResult != null) {
             if (!ordered) {
@@ -471,7 +540,7 @@ public abstract class QueryChecker {
      * @param cacheName Cache to check reservations.
      */
     public static void awaitReservationsRelease(IgniteEx node, String cacheName) throws IgniteInterruptedCheckedException {
-        GridDhtAtomicCache c = GridTestUtils.getFieldValue(node.cachex(cacheName), "delegate");
+        GridDhtCacheAdapter c = GridTestUtils.getFieldValue(node.cachex(cacheName), "delegate");
 
         List<GridDhtLocalPartition> parts = c.topology().localPartitions();
 

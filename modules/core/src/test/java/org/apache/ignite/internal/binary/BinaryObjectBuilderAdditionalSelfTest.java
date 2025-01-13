@@ -97,8 +97,6 @@ public class BinaryObjectBuilderAdditionalSelfTest extends AbstractBinaryArraysT
 
         bCfg.setClassNames(Arrays.asList("org.apache.ignite.internal.binary.mutabletest.*"));
 
-        cfg.setMarshaller(new BinaryMarshaller());
-
         return cfg;
     }
 
@@ -1542,11 +1540,11 @@ public class BinaryObjectBuilderAdditionalSelfTest extends AbstractBinaryArraysT
      * @return Wrapper.
      */
     private BinaryObjectBuilderImpl newWrapper(String typeName) {
-        CacheObjectBinaryProcessorImpl processor = (CacheObjectBinaryProcessorImpl)(
+        CacheObjectBinaryProcessorImpl proc = (CacheObjectBinaryProcessorImpl)(
             (IgniteBinaryImpl)binaries()).processor();
 
-        return new BinaryObjectBuilderImpl(processor.binaryContext(), processor.typeId(typeName),
-            processor.binaryContext().userTypeName(typeName));
+        return new BinaryObjectBuilderImpl(proc.binaryContext(), proc.typeId(typeName),
+            proc.binaryContext().userTypeName(typeName));
     }
 
     /** */
@@ -1896,9 +1894,9 @@ public class BinaryObjectBuilderAdditionalSelfTest extends AbstractBinaryArraysT
      */
     @Test
     public void testGetNotAssignedFieldInBuilder() {
-        GridBinaryTestClasses.TestObjectContainer testObjectContainer = new GridBinaryTestClasses.TestObjectContainer();
-        testObjectContainer.foo = "binaryCachedValue";
-        BinaryObjectBuilderImpl builder = wrap(testObjectContainer);
+        GridBinaryTestClasses.TestObjectContainer testObjContainer = new GridBinaryTestClasses.TestObjectContainer();
+        testObjContainer.foo = "binaryCachedValue";
+        BinaryObjectBuilderImpl builder = wrap(testObjContainer);
         builder.setField("w", "wewe");
 
         assertNull(builder.getField("field"));

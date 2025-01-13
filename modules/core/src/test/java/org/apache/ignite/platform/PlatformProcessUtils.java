@@ -19,6 +19,7 @@ package org.apache.ignite.platform;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -49,6 +50,8 @@ public class PlatformProcessUtils {
             throws Exception {
         if (process != null)
             throw new Exception("PlatformProcessUtils can't start more than one process at a time.");
+
+        Thread.sleep(5000);
 
         ProcessBuilder pb = new ProcessBuilder(file, arg1, arg2);
         pb.directory(new File(workDir));
@@ -81,28 +84,32 @@ public class PlatformProcessUtils {
                             if (line.contains(waitForOutput))
                                 return;
                         }
-                    } catch (Exception ignored) {
-                        // No-op.
+
+                        throw new RuntimeException("Expected output not found: " + waitForOutput);
+                    }
+                    catch (IOException e) {
+                        throw new RuntimeException(e);
                     }
                 });
 
                 f.get(3, TimeUnit.MINUTES);
-            } catch (Exception e) {
+            }
+            catch (Exception e) {
                 process.destroyForcibly();
                 process = null;
 
-                String logString = String.join(System.lineSeparator(), log);
+                String logStr = String.join(System.lineSeparator(), log);
 
-                throw new Exception("Failed to wait for specified output ('" + waitForOutput + "'): " + logString, e);
+                throw new Exception("Failed to wait for specified output ('" + waitForOutput + "'): " + logStr, e);
             }
 
             if (!process.isAlive()) {
-                int exitValue = process.exitValue();
+                int exitVal = process.exitValue();
                 process = null;
 
-                String logString = String.join(System.lineSeparator(), log);
+                String logStr = String.join(System.lineSeparator(), log);
 
-                throw new Exception("Process has exited unexpectedly (" + exitValue + "): " + logString);
+                throw new Exception("Process has exited unexpectedly (" + exitVal + "): " + logStr);
             }
         }
 
@@ -112,20 +119,28 @@ public class PlatformProcessUtils {
                 String line;
                 while ((line = br.readLine()) != null)
                     System.out.println("PlatformProcessUtils >> " + line);
-            } catch (Exception ignored) {
+            }
+            catch (Exception ignored) {
                 // No-op.
             }
         });
     }
 
     /**
-     * Kills the process previously started with {@link #startProcess}.
+     * Kills the process previously started with {@link #startProcess}. Waits for until the process stops.
      */
     public static void destroyProcess() throws Exception {
         if (process == null)
             throw new Exception("Process has not been started");
 
+        System.out.println("PlatformProcessUtils >> stopping the process...");
+
         process.destroyForcibly();
+
+        process.waitFor();
+
         process = null;
+
+        System.out.println("PlatformProcessUtils >> the process has stopped.");
     }
 }

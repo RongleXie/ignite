@@ -42,6 +42,7 @@ import org.apache.ignite.internal.util.typedef.internal.U;
 
 import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.INDEX;
 import static org.apache.ignite.internal.processors.cache.query.GridCacheQueryType.TEXT;
+import static org.apache.ignite.internal.processors.performancestatistics.PerformanceStatisticsProcessor.indexQueryText;
 
 /**
  * Distributed query future.
@@ -68,6 +69,9 @@ public class GridCacheDistributedQueryFuture<K, V, R> extends GridCacheQueryFutu
     /** Metadata for IndexQuery. */
     private final CompletableFuture<IndexQueryResultMeta> idxQryMetaFut;
 
+    /** Query start time in nanoseconds to measure duration. */
+    private final long startTimeNanos;
+
     /**
      * @param ctx Cache context.
      * @param reqId Request ID.
@@ -86,6 +90,9 @@ public class GridCacheDistributedQueryFuture<K, V, R> extends GridCacheQueryFutu
         this.reqId = reqId;
 
         qryMgr = (GridCacheDistributedQueryManager<K, V>)ctx.queries();
+
+        if (qry.query().partition() != null)
+            nodes = Collections.singletonList(node(nodes));
 
         streams = new ConcurrentHashMap<>(nodes.size());
 
@@ -106,6 +113,24 @@ public class GridCacheDistributedQueryFuture<K, V, R> extends GridCacheQueryFutu
 
             reducer = qry.query().type() == TEXT ? new TextQueryReducer<>(streamsMap) : new UnsortedCacheQueryReducer<>(streamsMap);
         }
+
+        startTimeNanos = ctx.kernalContext().performanceStatistics().enabled() ? System.nanoTime() : 0;
+    }
+
+    /**
+     * @return Nodes for query execution.
+     */
+    private ClusterNode node(Collection<ClusterNode> nodes) {
+        ClusterNode rmtNode = null;
+
+        for (ClusterNode node : nodes) {
+            if (node.isLocal())
+                return node;
+
+            rmtNode = node;
+        }
+
+        return rmtNode;
     }
 
     /** {@inheritDoc} */
@@ -122,9 +147,9 @@ public class GridCacheDistributedQueryFuture<K, V, R> extends GridCacheQueryFutu
 
     /** {@inheritDoc} */
     @Override protected void onNodeLeft(UUID nodeId) {
-        boolean hasRemotePages = streams.get(nodeId).hasRemotePages();
+        NodePageStream<R> stream = streams.get(nodeId);
 
-        if (hasRemotePages)
+        if (stream != null && stream.hasRemotePages())
             onError(new ClusterTopologyCheckedException("Remote node has left topology: " + nodeId));
     }
 
@@ -295,5 +320,29 @@ public class GridCacheDistributedQueryFuture<K, V, R> extends GridCacheQueryFutu
 
             firstPageLatch.countDown();
         }
+    }
+
+    /** {@inheritDoc} */
+    @Override public boolean onDone(Collection<R> res, Throwable err) {
+        if (cctx.kernalContext().performanceStatistics().enabled() && startTimeNanos > 0) {
+            GridCacheQueryType type = qry.query().type();
+
+            String text;
+
+            if (type == INDEX)
+                text = indexQueryText(cctx.name(), qry.query().idxQryDesc());
+            else
+                text = cctx.name();
+
+            cctx.kernalContext().performanceStatistics().query(
+                type,
+                text,
+                reqId,
+                startTimeNanos,
+                System.nanoTime() - startTimeNanos,
+                err == null);
+        }
+
+        return super.onDone(res, err);
     }
 }

@@ -28,8 +28,9 @@ import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.internal.cache.query.index.IndexQueryResultMeta;
 import org.apache.ignite.internal.cache.query.index.sorted.IndexKeyDefinition;
+import org.apache.ignite.internal.cache.query.index.sorted.IndexKeyType;
 import org.apache.ignite.internal.cache.query.index.sorted.IndexRowComparator;
-import org.apache.ignite.internal.cache.query.index.sorted.IndexRowCompartorImpl;
+import org.apache.ignite.internal.cache.query.index.sorted.IndexRowComparatorImpl;
 import org.apache.ignite.internal.cache.query.index.sorted.keys.IndexKey;
 import org.apache.ignite.internal.cache.query.index.sorted.keys.IndexKeyFactory;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
@@ -96,7 +97,7 @@ public class IndexQueryReducer<R> extends MergeSortCacheQueryReducer<R> {
         private final IndexQueryResultMeta meta;
 
         /** Every node will return the same key types for the same index, then it's possible to use simple comparator. */
-        private final IndexRowComparator idxRowComp = new IndexRowCompartorImpl(null);
+        private final IndexRowComparator idxRowComp = new IndexRowComparatorImpl(null);
 
         /** */
         IndexedNodePageComparator(
@@ -131,13 +132,14 @@ public class IndexQueryReducer<R> extends MergeSortCacheQueryReducer<R> {
 
                 return 0;
 
-            } catch (IgniteCheckedException e) {
+            }
+            catch (IgniteCheckedException e) {
                 throw new IgniteException("Failed to sort remote index rows", e);
             }
         }
 
         /** */
-        private IndexKey key(String key, int type, IgniteBiTuple<?, ?> entry) throws IgniteCheckedException {
+        private IndexKey key(String key, IndexKeyType type, IgniteBiTuple<?, ?> entry) throws IgniteCheckedException {
             Object o;
 
             if (isKeyField(key))

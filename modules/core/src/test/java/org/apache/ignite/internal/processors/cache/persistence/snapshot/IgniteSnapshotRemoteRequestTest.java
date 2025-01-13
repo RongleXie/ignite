@@ -18,12 +18,16 @@
 package org.apache.ignite.internal.processors.cache.persistence.snapshot;
 
 import java.io.File;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,6 +36,7 @@ import java.util.function.BiFunction;
 import java.util.stream.Collectors;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
+import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInternalFuture;
 import org.apache.ignite.internal.IgniteInterruptedCheckedException;
@@ -49,13 +54,26 @@ import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.junit.Test;
 
-import static org.apache.ignite.internal.processors.cache.persistence.file.FilePageStoreManager.cacheGroupName;
+import static org.apache.ignite.configuration.IgniteConfiguration.DFLT_SNAPSHOT_THREAD_POOL_SIZE;
 import static org.apache.ignite.internal.processors.cache.persistence.file.FilePageStoreManager.partId;
+import static org.apache.ignite.internal.processors.cache.persistence.snapshot.SnapshotRestoreProcess.groupIdFromTmpDir;
 import static org.apache.ignite.testframework.GridTestUtils.assertThrowsAnyCause;
 import static org.apache.ignite.testframework.GridTestUtils.waitForCondition;
 
 /** */
 public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestoreBaseTest {
+    /** */
+    private int snapshotThreadPoolSize = DFLT_SNAPSHOT_THREAD_POOL_SIZE;
+
+    /** {@inheritDoc} */
+    @Override protected IgniteConfiguration getConfiguration(String igniteInstanceName) throws Exception {
+        IgniteConfiguration cfg = super.getConfiguration(igniteInstanceName);
+
+        cfg.setSnapshotThreadPoolSize(snapshotThreadPoolSize);
+
+        return cfg;
+    }
+
     /** @throws Exception If fails. */
     @Test
     public void testSnapshotRemoteRequestFromSingleNode() throws Exception {
@@ -63,7 +81,7 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
 
         IgniteEx ignite = startGridsWithCache(2, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
 
-        ignite.snapshot().createSnapshot(SNAPSHOT_NAME).get(TIMEOUT);
+        createAndCheckSnapshot(ignite, SNAPSHOT_NAME, null, TIMEOUT);
 
         Map<Integer, Set<Integer>> parts = owningParts(ignite, CU.cacheId(DEFAULT_CACHE_NAME), grid(1).localNode().id());
 
@@ -79,15 +97,17 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
                 for (Map.Entry<Integer, Set<Integer>> e : parts.entrySet())
                     parts0.computeIfAbsent(e.getKey(), k -> new HashSet<>()).addAll(e.getValue());
 
-                IgniteInternalFuture<Void> locFut = null;
+                IgniteInternalFuture<Void> locFut;
 
                 compFut.add(locFut = snp(ignite).requestRemoteSnapshotFiles(grid(1).localNode().id(),
+                    null,
                     SNAPSHOT_NAME,
+                    null,
                     parts,
                     () -> false,
                     defaultPartitionConsumer(parts0, latch)));
 
-                locFut.listen(f -> assertEquals("All partitions must be handled: " + parts0,
+                locFut.listen(() -> assertEquals("All partitions must be handled: " + parts0,
                     F.size(parts0.values(), Set::isEmpty), parts0.size()));
             }
             catch (IgniteCheckedException e) {
@@ -105,7 +125,7 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
     public void testSnapshotRemoteRequestEachOther() throws Exception {
         IgniteEx ignite = startGridsWithCache(2, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
 
-        ignite.snapshot().createSnapshot(SNAPSHOT_NAME).get(TIMEOUT);
+        createAndCheckSnapshot(ignite, SNAPSHOT_NAME, null, TIMEOUT);
 
         IgniteSnapshotManager mgr0 = snp(ignite);
         IgniteSnapshotManager mgr1 = snp(grid(1));
@@ -123,10 +143,10 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
             fromNode0.values().stream().mapToInt(Set::size).sum());
 
         // Snapshot must be taken on node1 and transmitted to node0.
-        IgniteInternalFuture<?> futFrom1To0 = mgr0.requestRemoteSnapshotFiles(node1, SNAPSHOT_NAME, fromNode1, () -> false,
-            defaultPartitionConsumer(fromNode1, latch));
-        IgniteInternalFuture<?> futFrom0To1 = mgr1.requestRemoteSnapshotFiles(node0, SNAPSHOT_NAME, fromNode0, () -> false,
-            defaultPartitionConsumer(fromNode0, latch));
+        IgniteInternalFuture<?> futFrom1To0 = mgr0.requestRemoteSnapshotFiles(node1, null, SNAPSHOT_NAME, null,
+            fromNode1, () -> false, defaultPartitionConsumer(fromNode1, latch));
+        IgniteInternalFuture<?> futFrom0To1 = mgr1.requestRemoteSnapshotFiles(node0, null, SNAPSHOT_NAME, null,
+            fromNode0, () -> false, defaultPartitionConsumer(fromNode0, latch));
 
         G.allGrids().forEach(g -> TestRecordingCommunicationSpi.spi(g).stopBlock());
 
@@ -141,7 +161,7 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
     public void testRemoteRequestedInitiatorNodeLeft() throws Exception {
         IgniteEx ignite = startGridsWithCache(2, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
 
-        ignite.snapshot().createSnapshot(SNAPSHOT_NAME).get(TIMEOUT);
+        createAndCheckSnapshot(ignite, SNAPSHOT_NAME, null, TIMEOUT);
 
         awaitPartitionMapExchange();
 
@@ -173,7 +193,9 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
         });
 
         snp(ignite).requestRemoteSnapshotFiles(grid(1).localNode().id(),
+            null,
             SNAPSHOT_NAME,
+            null,
             parts,
             () -> false,
             (part, t) -> {
@@ -206,7 +228,7 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
     public void testSnapshotRequestRemoteSourceNodeLeft() throws Exception {
         IgniteEx ignite = startGridsWithCache(2, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
 
-        ignite.snapshot().createSnapshot(SNAPSHOT_NAME).get(TIMEOUT);
+        createAndCheckSnapshot(ignite, SNAPSHOT_NAME, null, TIMEOUT);
 
         Map<Integer, Set<Integer>> parts = owningParts(ignite, CU.cacheId(DEFAULT_CACHE_NAME),
             grid(1).localNode().id());
@@ -214,12 +236,14 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
         CountDownLatch latch = new CountDownLatch(1);
 
         IgniteInternalFuture<?> fut = snp(ignite).requestRemoteSnapshotFiles(grid(1).localNode().id(),
+            null,
             SNAPSHOT_NAME,
+            null,
             parts,
             () -> false,
             (part, t) -> {
                 if (t == null) {
-                    int grpId = CU.cacheId(cacheGroupName(part.getParentFile()));
+                    int grpId = groupIdFromTmpDir(part.getParentFile());
 
                     assertTrue("Received cache group has not been requested", parts.containsKey(grpId));
                     assertTrue("Received partition has not been requested",
@@ -251,7 +275,7 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
     public void testSnapshotRequestRemoteCancel() throws Exception {
         IgniteEx ignite = startGridsWithCache(2, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
 
-        ignite.snapshot().createSnapshot(SNAPSHOT_NAME).get(TIMEOUT);
+        createAndCheckSnapshot(ignite, SNAPSHOT_NAME, null, TIMEOUT);
 
         Map<Integer, Set<Integer>> parts = owningParts(ignite, CU.cacheId(DEFAULT_CACHE_NAME),
             grid(1).localNode().id());
@@ -260,7 +284,9 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
         AtomicBoolean stopChecker = new AtomicBoolean();
 
         IgniteInternalFuture<Void> fut = snp(ignite).requestRemoteSnapshotFiles(grid(1).localNode().id(),
+            null,
             SNAPSHOT_NAME,
+            null,
             parts,
             stopChecker::get,
             (part, t) -> {
@@ -296,6 +322,53 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
             "Future cancelled prior to the all requested partitions processed");
     }
 
+    /** @throws Exception If fails. */
+    @Test
+    public void testSendPartitonsSequentially() throws Exception {
+        snapshotThreadPoolSize = 1;
+
+        IgniteEx sndr = startGridsWithCache(3, CACHE_KEYS_RANGE, valueBuilder(), dfltCacheCfg);
+
+        UUID sndNode = sndr.localNode().id();
+
+        createAndCheckSnapshot(sndr, SNAPSHOT_NAME, null, TIMEOUT);
+
+        IgniteSnapshotManager mgr0 = snp(grid(0));
+
+        List<UUID> nodes = new CopyOnWriteArrayList<>();
+
+        mgr0.remoteSnapshotSenderFactory((rqId, nodeId) -> new DelegateSnapshotSender(log,
+            snp(sndr).snapshotExecutorService(), mgr0.remoteSnapshotSenderFactory(rqId, nodeId)) {
+            @Override public void sendPart0(File part, String cacheDirName, GroupPartitionId pair, Long length) {
+                nodes.add(nodeId);
+
+                // Single thread must send partitions sequentially node by node.
+                checkDuplicates(nodes);
+
+                super.sendPart0(part, cacheDirName, pair, length);
+            }
+        });
+
+        Collection<IgniteEx> rcvrs = F.viewReadOnly(G.allGrids(), srv -> (IgniteEx)srv,
+            srv -> !F.eq(sndr.localNode(), srv.cluster().localNode()));
+
+        GridCompoundFuture<Void, Void> futs = new GridCompoundFuture<>();
+
+        for (IgniteEx rcv : rcvrs) {
+            Map<Integer, Set<Integer>> expParts = owningParts(rcv, CU.cacheId(DEFAULT_CACHE_NAME), sndNode);
+
+            IgniteInternalFuture<Void> fut = snp(rcv)
+                .requestRemoteSnapshotFiles(sndNode, null, SNAPSHOT_NAME, null, expParts, () -> false,
+                    defaultPartitionConsumer(expParts, null));
+
+            fut.listen(() -> expParts.values().forEach(integers -> assertTrue(integers.isEmpty())));
+
+            futs.add(fut);
+        }
+
+        futs.markInitialized().get(getTestTimeout());
+    }
+
     /**
      * @param parts Expected partitions.
      * @param latch Latch to await partitions processed.
@@ -305,13 +378,14 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
         return (part, t) -> {
             assertNull(t);
 
-            int grpId = CU.cacheId(cacheGroupName(part.getParentFile()));
+            int grpId = groupIdFromTmpDir(part.getParentFile());
 
             assertTrue("Received cache group has not been requested", parts.containsKey(grpId));
             assertTrue("Received partition has not been requested",
                 parts.get(grpId).remove(partId(part.getName())));
 
-            latch.countDown();
+            if (latch != null)
+                latch.countDown();
         };
     }
 
@@ -332,5 +406,26 @@ public class IgniteSnapshotRemoteRequestTest extends IgniteClusterSnapshotRestor
             .filter(p -> p.getValue() == GridDhtPartitionState.OWNING)
             .map(Map.Entry::getKey)
             .collect(Collectors.toSet()));
+    }
+
+    /**
+     * Checks that the list can contain only neighboring duplicates:
+     * 1, 1, 1, 3, 2, 2 -> ok
+     * 1, 1, 3, 1, 2, 2 -> fail
+     *
+     * @param list List to check.
+     */
+    private <T> void checkDuplicates(List<T> list) {
+        LinkedList<T> grouped = new LinkedList<>();
+
+        for (T item : list) {
+            if (!F.eq(grouped.peekLast(), item))
+                grouped.add(item);
+        }
+
+        if (list.stream().distinct().collect(Collectors.toList()).equals(grouped))
+            return;
+
+        fail("List contains non neighboring duplicates: " + list);
     }
 }

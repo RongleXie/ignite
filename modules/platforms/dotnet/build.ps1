@@ -83,7 +83,7 @@ param (
     [switch]$clean,
     [ValidateSet("Release", "Debug")]
     [string]$configuration="Release",
-    [string]$mavenOpts="-U -P-lgpl,-scala,-all-scala,-spark-2.4,-examples,-test,-benchmarks -Dmaven.javadoc.skip=true",
+    [string]$mavenOpts="-U -P-lgpl,-scala,-spark-2.4,-examples,-test,-benchmarks -Dmaven.javadoc.skip=true",
 	[string]$jarDirs="modules\indexing\target,modules\core\target,modules\spring\target",
 	[string]$version="",
 	[string]$versionSuffix=""
@@ -184,10 +184,13 @@ cd $PSScriptRoot
 # 2) Build .NET
 if (!$skipDotNet) {
     Build-Solution ".\Apache.Ignite.sln" "bin\net461"
+    
+    # Overwrite dlls to ensure that net461 versions are used instead of netstandard2. 
+    Copy-Item -Force -Recurse ".\Apache.Ignite\bin\$configuration\net461\*" "bin\net461"
 }
 
 if(!$skipDotNetCore) {
-    Build-Solution ".\Apache.Ignite\Apache.Ignite.DotNetCore.csproj" "bin\netcoreapp3.1"
+    Build-Solution ".\Apache.Ignite.DotNetCore.sln" "bin\net6.0"
 }
 
 

@@ -21,6 +21,7 @@ import java.sql.Timestamp;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
@@ -30,6 +31,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.ignite.Ignite;
@@ -47,6 +49,7 @@ import org.apache.ignite.internal.binary.BinaryArray;
 import org.apache.ignite.internal.util.lang.IgnitePair;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
+import org.apache.ignite.lang.IgnitePredicate;
 import org.apache.ignite.platform.model.ACL;
 import org.apache.ignite.platform.model.AccessLevel;
 import org.apache.ignite.platform.model.Account;
@@ -60,6 +63,7 @@ import org.apache.ignite.platform.model.User;
 import org.apache.ignite.platform.model.Value;
 import org.apache.ignite.resources.IgniteInstanceResource;
 import org.apache.ignite.services.Service;
+import org.apache.ignite.services.ServiceCallInterceptor;
 import org.apache.ignite.services.ServiceConfiguration;
 import org.apache.ignite.services.ServiceContext;
 import org.apache.ignite.spi.metric.HistogramMetric;
@@ -76,13 +80,17 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Task that deploys a Java service.
+ * Task that deploys a Java service on all or selected nodes.
  */
-public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object> {
+public class PlatformDeployServiceTask extends ComputeTaskAdapter<Object[], Object> {
     /** {@inheritDoc} */
-    @NotNull @Override public Map<? extends ComputeJob, ClusterNode> map(List<ClusterNode> subgrid,
-        @Nullable String serviceName) throws IgniteException {
-        return Collections.singletonMap(new PlatformDeployServiceJob(serviceName), F.first(subgrid));
+    @NotNull @Override public Map<? extends ComputeJob, ClusterNode> map(
+        List<ClusterNode> subgrid,
+        @Nullable Object[] consistentIds
+    ) throws IgniteException {
+        Collection<Object> nodeIds = F.isEmpty(consistentIds) ? null : Arrays.asList(consistentIds);
+
+        return Collections.singletonMap(new PlatformDeployServiceJob(nodeIds), F.first(subgrid));
     }
 
     /** {@inheritDoc} */
@@ -94,8 +102,8 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
      * Job.
      */
     private static class PlatformDeployServiceJob extends ComputeJobAdapter {
-        /** Service name. */
-        private final String serviceName;
+        /** */
+        @Nullable private final Collection<Object> consistentIds;
 
         /** Ignite. */
         @IgniteInstanceResource
@@ -104,11 +112,10 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
         /**
          * Ctor.
          *
-         * @param serviceName Service name.
+         * @param consistentIds if not {@code null}, service is deployed only on these nodes.
          */
-        private PlatformDeployServiceJob(String serviceName) {
-            assert serviceName != null;
-            this.serviceName = serviceName;
+        private PlatformDeployServiceJob(@Nullable Collection<Object> consistentIds) {
+            this.consistentIds = consistentIds;
         }
 
         /** {@inheritDoc} */
@@ -116,9 +123,15 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
             ServiceConfiguration svcCfg = new ServiceConfiguration();
 
             svcCfg.setStatisticsEnabled(true);
-            svcCfg.setName(serviceName);
+            svcCfg.setName(PlatformTestService.SRVC_NAME);
+
             svcCfg.setMaxPerNodeCount(1);
+
+            if (!F.isEmpty(consistentIds))
+                svcCfg.setNodeFilter(new ConsistentIdNodeFilter(consistentIds));
+
             svcCfg.setService(new PlatformTestService());
+            svcCfg.setInterceptors(new PlatformTestServiceInterceptor());
 
             ignite.services().deploy(svcCfg);
 
@@ -130,6 +143,9 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
      * Test service.
      */
     public static class PlatformTestService implements Service, PlatformHelperService {
+        /** */
+        private static final String SRVC_NAME = "TestJavaService";
+
         /** */
         @IgniteInstanceResource
         private IgniteEx ignite;
@@ -680,6 +696,11 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
         }
 
         /** */
+        public int testInterception(int val) {
+            return val;
+        }
+
+        /** */
         public void sleep(long delayMs) {
             try {
                 U.sleep(delayMs);
@@ -782,6 +803,22 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
     }
 
     /** */
+    public static class PlatformTestServiceInterceptor implements ServiceCallInterceptor {
+        /** */
+        private static final long serialVersionUID = 0L;
+
+        /** {@inheritDoc} */
+        @Override public Object invoke(String mtd, Object[] args, ServiceContext ctx, Callable<Object> next) throws Exception {
+            Object res = next.call();
+
+            if ("testInterception".equals(mtd))
+                return (int)res * (int)res;
+
+            return res;
+        }
+    }
+
+    /** */
     public static class TestMapped1Exception extends RuntimeException {
         /** */
         public TestMapped1Exception(String msg) {
@@ -815,5 +852,23 @@ public class PlatformDeployServiceTask extends ComputeTaskAdapter<String, Object
          * @return Number of registered values among the service statistics.
          */
         int testNumberOfInvocations(String svcName, String histName);
+    }
+
+    /**
+     * Filters nodes by their consistent id.
+     */
+    private static final class ConsistentIdNodeFilter implements IgnitePredicate<ClusterNode> {
+        /** */
+        private final Collection<Object> consistentIds;
+
+        /** */
+        private ConsistentIdNodeFilter(Collection<Object> consistentIds) {
+            this.consistentIds = consistentIds;
+        }
+
+        /** {@inheritDoc} */
+        @Override public boolean apply(ClusterNode node) {
+            return consistentIds.contains(node.consistentId());
+        }
     }
 }

@@ -17,11 +17,7 @@
 
 package org.apache.ignite.internal.processors.query.calcite.prepare;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import org.apache.ignite.internal.processors.query.calcite.metadata.ColocationGroup;
-import org.apache.ignite.internal.processors.query.calcite.metadata.FragmentMapping;
+import org.apache.ignite.internal.processors.query.calcite.metadata.AffinityService;
 import org.apache.ignite.internal.processors.query.calcite.metadata.MappingService;
 
 /**
@@ -29,31 +25,24 @@ import org.apache.ignite.internal.processors.query.calcite.metadata.MappingServi
  */
 public interface MultiStepPlan extends QueryPlan {
     /**
-     * @return Query fragments.
-     */
-    List<Fragment> fragments();
-
-    /**
      * @return Fields metadata.
      */
     FieldsMetadata fieldsMetadata();
 
     /**
-     * @param fragment Fragment.
-     * @return Mapping for a given fragment.
+     * @return Parameters metadata;
      */
-    FragmentMapping mapping(Fragment fragment);
-
-    /** */
-    ColocationGroup target(Fragment fragment);
-
-    /** */
-    Map<Long, List<UUID>> remotes(Fragment fragment);
+    FieldsMetadata paramsMetadata();
 
     /**
      * Inits query fragments.
      *
      * @param ctx Planner context.
      */
-    void init(MappingService mappingService, MappingQueryContext ctx);
+    ExecutionPlan init(MappingService mappingService, AffinityService affSvc, MappingQueryContext ctx);
+
+    /**
+     * @return Text representation of query plan
+     */
+    String textPlan();
 }

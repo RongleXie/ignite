@@ -31,14 +31,11 @@ import org.junit.runners.Suite;
 @Suite.SuiteClasses({
     IgniteCacheLargeValueExpireTest.class,
 
-    IgniteCacheAtomicLocalExpiryPolicyTest.class,
-    IgniteCacheAtomicLocalOnheapExpiryPolicyTest.class,
     IgniteCacheAtomicExpiryPolicyTest.class,
     IgniteCacheAtomicOnheapExpiryPolicyTest.class,
     IgniteCacheAtomicWithStoreExpiryPolicyTest.class,
     IgniteCacheAtomicReplicatedExpiryPolicyTest.class,
 
-    IgniteCacheTxLocalExpiryPolicyTest.class,
     IgniteCacheTxExpiryPolicyTest.class,
     IgniteCacheTxWithStoreExpiryPolicyTest.class,
     IgniteCacheTxReplicatedExpiryPolicyTest.class,
@@ -60,7 +57,8 @@ import org.junit.runners.Suite;
 
     IgniteCacheExpireWhileRebalanceTest.class,
 
-    ExpiryPolicyInfoLoggingTest.class
+    ExpiryPolicyInfoLoggingTest.class,
+    PendingTreeCleaningTest.class,
 })
 public class IgniteCacheExpiryPolicyTestSuite {
 }

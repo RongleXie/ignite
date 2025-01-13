@@ -21,17 +21,17 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteDataStreamer;
 import org.apache.ignite.IgniteSystemProperties;
 import org.apache.ignite.cache.QueryEntity;
-import org.apache.ignite.cache.QueryIndex;
+import org.apache.ignite.cache.QueryIndexType;
 import org.apache.ignite.cache.query.BulkLoadContextCursor;
 import org.apache.ignite.cache.query.FieldsQueryCursor;
 import org.apache.ignite.configuration.CacheConfiguration;
@@ -43,12 +43,9 @@ import org.apache.ignite.internal.processors.bulkload.BulkLoadParser;
 import org.apache.ignite.internal.processors.bulkload.BulkLoadProcessor;
 import org.apache.ignite.internal.processors.bulkload.BulkLoadStreamerWriter;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
-import org.apache.ignite.internal.processors.cache.distributed.near.GridNearTxLocal;
 import org.apache.ignite.internal.processors.cache.query.IgniteQueryErrorCode;
-import org.apache.ignite.internal.processors.query.GridQueryProperty;
 import org.apache.ignite.internal.processors.query.GridQueryTypeDescriptor;
 import org.apache.ignite.internal.processors.query.IgniteSQLException;
-import org.apache.ignite.internal.processors.query.NestedTxMode;
 import org.apache.ignite.internal.processors.query.QueryEntityEx;
 import org.apache.ignite.internal.processors.query.QueryField;
 import org.apache.ignite.internal.processors.query.QueryUtils;
@@ -66,21 +63,13 @@ import org.apache.ignite.internal.processors.query.h2.sql.GridSqlDropIndex;
 import org.apache.ignite.internal.processors.query.h2.sql.GridSqlDropTable;
 import org.apache.ignite.internal.processors.query.h2.sql.GridSqlStatement;
 import org.apache.ignite.internal.processors.query.schema.SchemaOperationException;
-import org.apache.ignite.internal.processors.query.stat.StatisticsKey;
-import org.apache.ignite.internal.processors.query.stat.StatisticsTarget;
-import org.apache.ignite.internal.processors.query.stat.config.StatisticsObjectConfiguration;
 import org.apache.ignite.internal.sql.SqlCommandProcessor;
-import org.apache.ignite.internal.sql.command.SqlAnalyzeCommand;
-import org.apache.ignite.internal.sql.command.SqlBeginTransactionCommand;
 import org.apache.ignite.internal.sql.command.SqlBulkLoadCommand;
 import org.apache.ignite.internal.sql.command.SqlCommand;
-import org.apache.ignite.internal.sql.command.SqlCommitTransactionCommand;
-import org.apache.ignite.internal.sql.command.SqlDropStatisticsCommand;
-import org.apache.ignite.internal.sql.command.SqlKillQueryCommand;
-import org.apache.ignite.internal.sql.command.SqlRefreshStatitsicsCommand;
-import org.apache.ignite.internal.sql.command.SqlRollbackTransactionCommand;
+import org.apache.ignite.internal.sql.command.SqlCreateIndexCommand;
+import org.apache.ignite.internal.sql.command.SqlDropIndexCommand;
+import org.apache.ignite.internal.sql.command.SqlIndexColumn;
 import org.apache.ignite.internal.sql.command.SqlSetStreamingCommand;
-import org.apache.ignite.internal.util.future.GridFinishedFuture;
 import org.apache.ignite.internal.util.lang.IgniteClosureX;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
@@ -96,12 +85,8 @@ import org.h2.command.dml.NoOperation;
 import org.h2.table.Column;
 import org.h2.value.DataType;
 import org.h2.value.Value;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import static org.apache.ignite.internal.processors.cache.mvcc.MvccUtils.mvccEnabled;
-import static org.apache.ignite.internal.processors.cache.mvcc.MvccUtils.tx;
-import static org.apache.ignite.internal.processors.cache.mvcc.MvccUtils.txStart;
 import static org.apache.ignite.internal.processors.query.QueryUtils.convert;
 import static org.apache.ignite.internal.processors.query.QueryUtils.isDdlOnSchemaSupported;
 import static org.apache.ignite.internal.processors.query.h2.sql.GridSqlQueryParser.PARAM_WRAP_VALUE;
@@ -111,7 +96,7 @@ import static org.apache.ignite.internal.processors.query.h2.sql.GridSqlQueryPar
  */
 public class CommandProcessor extends SqlCommandProcessor {
     /** Schema manager. */
-    private final SchemaManager schemaMgr;
+    private final H2SchemaManager schemaMgr;
 
     /** H2 Indexing. */
     private final IgniteH2Indexing idx;
@@ -126,8 +111,8 @@ public class CommandProcessor extends SqlCommandProcessor {
      * @param ctx Kernal context.
      * @param schemaMgr Schema manager.
      */
-    public CommandProcessor(GridKernalContext ctx, SchemaManager schemaMgr, IgniteH2Indexing idx) {
-        super(ctx, schemaMgr);
+    public CommandProcessor(GridKernalContext ctx, H2SchemaManager schemaMgr, IgniteH2Indexing idx) {
+        super(ctx);
 
         this.schemaMgr = schemaMgr;
         this.idx = idx;
@@ -152,9 +137,14 @@ public class CommandProcessor extends SqlCommandProcessor {
         FieldsQueryCursor<List<?>> res = H2Utils.zeroCursor();
         boolean unregister = true;
 
-        if (cmdNative != null) {
-            assert cmdH2 == null;
+        if (cmdH2 != null) {
+            assert cmdNative == null;
 
+            // Some commands are duplicated.
+            cmdNative = convertH2Command(cmdH2);
+        }
+
+        if (cmdNative != null) {
             if (isCommandSupported(cmdNative)) {
                 FieldsQueryCursor<List<?>> resNative = runNativeCommand(sql, cmdNative, params, cliCtx, qryId);
 
@@ -194,14 +184,6 @@ public class CommandProcessor extends SqlCommandProcessor {
             return processBulkLoadCommand((SqlBulkLoadCommand)cmdNative, qryId);
         else if (cmdNative instanceof SqlSetStreamingCommand)
             processSetStreamingCommand((SqlSetStreamingCommand)cmdNative, cliCtx);
-        else if (cmdNative instanceof SqlAnalyzeCommand)
-            processAnalyzeCommand((SqlAnalyzeCommand)cmdNative);
-        else if (cmdNative instanceof SqlRefreshStatitsicsCommand)
-            processRefreshStatisticsCommand((SqlRefreshStatitsicsCommand)cmdNative);
-        else if (cmdNative instanceof SqlDropStatisticsCommand)
-            processDropStatisticsCommand((SqlDropStatisticsCommand)cmdNative);
-        else
-            processTxCommand(cmdNative, params);
 
         return null;
     }
@@ -209,79 +191,43 @@ public class CommandProcessor extends SqlCommandProcessor {
     /** {@inheritDoc} */
     @Override public boolean isCommandSupported(SqlCommand cmd) {
         return super.isCommandSupported(cmd)
-            || cmd instanceof SqlBeginTransactionCommand
-            || cmd instanceof SqlCommitTransactionCommand
-            || cmd instanceof SqlRollbackTransactionCommand
             || cmd instanceof SqlBulkLoadCommand
             || cmd instanceof SqlSetStreamingCommand;
     }
 
     /**
-     * Process kill query command
+     * Converts H2 command to corresponding native command if possible.
      *
-     * @param cmd Command.
-     */
-    private void processKillQueryCommand(SqlKillQueryCommand cmd) {
-        idx.runningQueryManager().cancelQuery(cmd.nodeQueryId(), cmd.nodeId(), cmd.async());
-    }
+     * @param cmdH2 H2 command.
+     * @return Native command.
+     **/
+    private @Nullable SqlCommand convertH2Command(GridSqlStatement cmdH2) {
+        if (cmdH2 instanceof GridSqlCreateIndex) {
+            GridSqlCreateIndex cmd = (GridSqlCreateIndex)cmdH2;
 
-    /**
-     * Process analyze command.
-     *
-     * @param cmd Sql analyze command.
-     */
-    private void processAnalyzeCommand(SqlAnalyzeCommand cmd) throws IgniteCheckedException {
-        ctx.security().authorize(SecurityPermission.CHANGE_STATISTICS);
+            return new SqlCreateIndexCommand(
+                cmd.schemaName(),
+                cmd.tableName(),
+                cmd.index().getName(),
+                cmd.ifNotExists(),
+                cmd.index().getFields().entrySet().stream().map(e -> new SqlIndexColumn(e.getKey(), !e.getValue()))
+                    .collect(Collectors.toList()),
+                cmd.index().getIndexType() == QueryIndexType.GEOSPATIAL,
+                0,
+                -1
+            );
+        }
+        else if (cmdH2 instanceof GridSqlDropIndex) {
+            GridSqlDropIndex cmd = (GridSqlDropIndex)cmdH2;
 
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ctx.query().getIndexing();
+            return new SqlDropIndexCommand(
+                cmd.schemaName(),
+                cmd.indexName(),
+                cmd.ifExists()
+            );
+        }
 
-        StatisticsObjectConfiguration objCfgs[] = cmd.configurations().stream()
-            .map(t -> {
-                if (t.key().schema() == null) {
-                    StatisticsKey key = new StatisticsKey(cmd.schemaName(), t.key().obj());
-
-                    return new StatisticsObjectConfiguration(key, t.columns().values(),
-                        t.maxPartitionObsolescencePercent());
-                }
-                else
-                    return t;
-            }).toArray(StatisticsObjectConfiguration[]::new);
-
-        indexing.statsManager().collectStatistics(objCfgs);
-    }
-
-    /**
-     * Process refresh statistics command.
-     *
-     * @param cmd Refresh statistics command.
-     */
-    private void processRefreshStatisticsCommand(SqlRefreshStatitsicsCommand cmd) throws IgniteCheckedException {
-        ctx.security().authorize(SecurityPermission.REFRESH_STATISTICS);
-
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ctx.query().getIndexing();
-
-        StatisticsTarget[] targets = cmd.targets().stream()
-            .map(t -> (t.schema() == null) ? new StatisticsTarget(cmd.schemaName(), t.obj(), t.columns()) : t)
-            .toArray(StatisticsTarget[]::new);
-
-        indexing.statsManager().refreshStatistics(targets);
-    }
-
-    /**
-     * Process drop statistics command.
-     *
-     * @param cmd Drop statistics command.
-     */
-    private void processDropStatisticsCommand(SqlDropStatisticsCommand cmd) throws IgniteCheckedException {
-        ctx.security().authorize(SecurityPermission.CHANGE_STATISTICS);
-
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ctx.query().getIndexing();
-
-        StatisticsTarget[] targets = cmd.targets().stream()
-            .map(t -> (t.schema() == null) ? new StatisticsTarget(cmd.schemaName(), t.obj(), t.columns()) : t)
-            .toArray(StatisticsTarget[]::new);
-
-        indexing.statsManager().dropStatistics(targets);
+        return null;
     }
 
     /**
@@ -294,69 +240,7 @@ public class CommandProcessor extends SqlCommandProcessor {
         IgniteInternalFuture fut = null;
 
         try {
-            finishActiveTxIfNecessary();
-
-            if (cmdH2 instanceof GridSqlCreateIndex) {
-                GridSqlCreateIndex cmd = (GridSqlCreateIndex)cmdH2;
-
-                isDdlOnSchemaSupported(cmd.schemaName());
-
-                GridH2Table tbl = schemaMgr.dataTable(cmd.schemaName(), cmd.tableName());
-
-                if (tbl == null)
-                    throw new SchemaOperationException(SchemaOperationException.CODE_TABLE_NOT_FOUND, cmd.tableName());
-
-                assert tbl.rowDescriptor() != null;
-
-                ensureDdlSupported(tbl.cacheInfo());
-
-                QueryIndex newIdx = new QueryIndex();
-
-                newIdx.setName(cmd.index().getName());
-
-                newIdx.setIndexType(cmd.index().getIndexType());
-
-                LinkedHashMap<String, Boolean> flds = new LinkedHashMap<>();
-
-                // Let's replace H2's table and property names by those operated by GridQueryProcessor.
-                GridQueryTypeDescriptor typeDesc = tbl.rowDescriptor().type();
-
-                for (Map.Entry<String, Boolean> e : cmd.index().getFields().entrySet()) {
-                    GridQueryProperty prop = typeDesc.property(e.getKey());
-
-                    if (prop == null)
-                        throw new SchemaOperationException(SchemaOperationException.CODE_COLUMN_NOT_FOUND, e.getKey());
-
-                    flds.put(prop.name(), e.getValue());
-                }
-
-                newIdx.setFields(flds);
-
-                fut = ctx.query().dynamicIndexCreate(tbl.cacheName(), cmd.schemaName(), typeDesc.tableName(),
-                    newIdx, cmd.ifNotExists(), 0);
-            }
-            else if (cmdH2 instanceof GridSqlDropIndex) {
-                GridSqlDropIndex cmd = (GridSqlDropIndex)cmdH2;
-
-                isDdlOnSchemaSupported(cmd.schemaName());
-
-                GridH2Table tbl = schemaMgr.dataTableForIndex(cmd.schemaName(), cmd.indexName());
-
-                if (tbl != null) {
-                    ensureDdlSupported(tbl.cacheInfo());
-
-                    fut = ctx.query().dynamicIndexDrop(tbl.cacheName(), cmd.schemaName(), cmd.indexName(),
-                        cmd.ifExists());
-                }
-                else {
-                    if (cmd.ifExists())
-                        fut = new GridFinishedFuture();
-                    else
-                        throw new SchemaOperationException(SchemaOperationException.CODE_INDEX_NOT_FOUND,
-                            cmd.indexName());
-                }
-            }
-            else if (cmdH2 instanceof GridSqlCreateTable) {
+            if (cmdH2 instanceof GridSqlCreateTable) {
                 GridSqlCreateTable cmd = (GridSqlCreateTable)cmdH2;
 
                 ctx.security().authorize(cmd.cacheName(), SecurityPermission.CACHE_CREATE);
@@ -503,10 +387,6 @@ public class CommandProcessor extends SqlCommandProcessor {
                     GridCacheContext cctx = tbl.cacheContext();
 
                     assert cctx != null;
-
-                    if (cctx.mvccEnabled())
-                        throw new IgniteSQLException("Cannot drop column(s) with enabled MVCC. " +
-                            "Operation is unsupported at the moment.", IgniteQueryErrorCode.UNSUPPORTED_OPERATION);
 
                     if (QueryUtils.isSqlType(tbl.rowDescriptor().type().valueClass()))
                         throw new SchemaOperationException("Cannot drop column(s) because table was created " +
@@ -720,108 +600,6 @@ public class CommandProcessor extends SqlCommandProcessor {
     }
 
     /**
-     * Process transactional command.
-     * @param cmd Command.
-     * @param params Parameters.
-     * @throws IgniteCheckedException if failed.
-     */
-    private void processTxCommand(SqlCommand cmd, QueryParameters params)
-        throws IgniteCheckedException {
-        NestedTxMode nestedTxMode = params.nestedTxMode();
-
-        GridNearTxLocal tx = tx(ctx);
-
-        if (cmd instanceof SqlBeginTransactionCommand) {
-            if (!mvccEnabled(ctx))
-                throw new IgniteSQLException("MVCC must be enabled in order to start transaction.",
-                    IgniteQueryErrorCode.MVCC_DISABLED);
-
-            if (tx != null) {
-                if (nestedTxMode == null)
-                    nestedTxMode = NestedTxMode.DEFAULT;
-
-                switch (nestedTxMode) {
-                    case COMMIT:
-                        doCommit(tx);
-
-                        txStart(ctx, params.timeout());
-
-                        break;
-
-                    case IGNORE:
-                        log.warning("Transaction has already been started, ignoring BEGIN command.");
-
-                        break;
-
-                    case ERROR:
-                        throw new IgniteSQLException("Transaction has already been started.",
-                            IgniteQueryErrorCode.TRANSACTION_EXISTS);
-
-                    default:
-                        throw new IgniteSQLException("Unexpected nested transaction handling mode: " +
-                            nestedTxMode.name());
-                }
-            }
-            else
-                txStart(ctx, params.timeout());
-        }
-        else if (cmd instanceof SqlCommitTransactionCommand) {
-            // Do nothing if there's no transaction.
-            if (tx != null)
-                doCommit(tx);
-        }
-        else {
-            assert cmd instanceof SqlRollbackTransactionCommand;
-
-            // Do nothing if there's no transaction.
-            if (tx != null)
-                doRollback(tx);
-        }
-    }
-
-    /**
-     * Commit and properly close transaction.
-     * @param tx Transaction.
-     * @throws IgniteCheckedException if failed.
-     */
-    private void doCommit(@NotNull GridNearTxLocal tx) throws IgniteCheckedException {
-        try {
-            tx.commit();
-        }
-        finally {
-            closeTx(tx);
-        }
-    }
-
-    /**
-     * Rollback and properly close transaction.
-     * @param tx Transaction.
-     * @throws IgniteCheckedException if failed.
-     */
-    public void doRollback(@NotNull GridNearTxLocal tx) throws IgniteCheckedException {
-        try {
-            tx.rollback();
-        }
-        finally {
-            closeTx(tx);
-        }
-    }
-
-    /**
-     * Properly close transaction.
-     * @param tx Transaction.
-     * @throws IgniteCheckedException if failed.
-     */
-    private void closeTx(@NotNull GridNearTxLocal tx) throws IgniteCheckedException {
-        try {
-            tx.close();
-        }
-        finally {
-            ctx.cache().context().tm().resetContext();
-        }
-    }
-
-    /**
      * Process SET STREAMING command.
      *
      * @param cmd Command.
@@ -864,7 +642,7 @@ public class CommandProcessor extends SqlCommandProcessor {
                 IgniteQueryErrorCode.TABLE_NOT_FOUND);
         }
 
-        H2Utils.checkAndStartNotStartedCache(ctx, tbl);
+        H2Utils.checkAndStartNotStartedCache(ctx, tbl.cacheInfo());
 
         UpdatePlan plan = UpdatePlanBuilder.planForBulkLoad(cmd, tbl);
 
@@ -876,11 +654,11 @@ public class CommandProcessor extends SqlCommandProcessor {
 
         BulkLoadParser inputParser = BulkLoadParser.createParser(cmd.inputFormat());
 
-        BulkLoadProcessor processor = new BulkLoadProcessor(inputParser, dataConverter, outputWriter,
+        BulkLoadProcessor proc = new BulkLoadProcessor(inputParser, dataConverter, outputWriter,
             idx.runningQueryManager(), qryId, ctx.tracing());
 
         BulkLoadAckClientParameters params = new BulkLoadAckClientParameters(cmd.localFileName(), cmd.packetSize());
 
-        return new BulkLoadContextCursor(processor, params);
+        return new BulkLoadContextCursor(proc, params);
     }
 }

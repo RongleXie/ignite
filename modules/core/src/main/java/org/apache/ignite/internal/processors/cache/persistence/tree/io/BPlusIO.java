@@ -58,7 +58,7 @@ import org.apache.ignite.lang.IgniteInClosure;
  * {@code forwardId} ({@link #getForward(long)}) is a link to the forward page, please refer to {@link BPlusTree} for
  * the explanation.
  * <p/>
- * {@code removeId} ({@link #getRemoveId(long)}) is a special value that's used to check tree invariants durning
+ * {@code removeId} ({@link #getRemoveId(long)}) is a special value that's used to check tree invariants during
  * deletions. Please refer to {@link BPlusTree} for better explanation.
  *
  * @see BPlusTree
@@ -467,6 +467,11 @@ public abstract class BPlusIO<L> extends PageIO implements CompactablePageIO {
             .a(",\n\tforward=").appendHex(getForward(addr))
             .a(",\n\tremoveId=").appendHex(getRemoveId(addr))
             .a("\n]");
+    }
+
+    /** {@inheritDoc} */
+    @Override public int getFreeSpace(int pageSize, long pageAddr) {
+        return (getMaxCount(pageAddr, pageSize) - getCount(pageAddr)) * getItemSize();
     }
 
     /**

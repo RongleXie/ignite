@@ -286,7 +286,7 @@ public abstract class GridCacheMessage implements Message {
      * @param ctx Cache context.
      * @throws IgniteCheckedException If failed.
      */
-    public void prepareMarshal(GridCacheSharedContext ctx) throws IgniteCheckedException {
+    public void prepareMarshal(GridCacheSharedContext<?, ?> ctx) throws IgniteCheckedException {
         // No-op.
     }
 
@@ -298,7 +298,7 @@ public abstract class GridCacheMessage implements Message {
      * @param ldr Class loader.
      * @throws IgniteCheckedException If failed.
      */
-    public void finishUnmarshal(GridCacheSharedContext ctx, ClassLoader ldr) throws IgniteCheckedException {
+    public void finishUnmarshal(GridCacheSharedContext<?, ?> ctx, ClassLoader ldr) throws IgniteCheckedException {
         // No-op.
     }
 
@@ -435,15 +435,17 @@ public abstract class GridCacheMessage implements Message {
      * @throws IgniteCheckedException If failed.
      */
     protected final void unmarshalTx(Iterable<IgniteTxEntry> txEntries,
-        boolean near,
         GridCacheSharedContext ctx,
         ClassLoader ldr) throws IgniteCheckedException {
         assert ldr != null;
         assert ctx != null;
 
         if (txEntries != null) {
-            for (IgniteTxEntry e : txEntries)
-                e.unmarshal(ctx, near, ldr);
+            for (IgniteTxEntry e : txEntries) {
+                e.prepareUnmarshal(ctx, topologyVersion(), false);
+
+                e.unmarshal(ctx, false, ldr);
+            }
         }
     }
 
@@ -586,9 +588,8 @@ public abstract class GridCacheMessage implements Message {
     @SuppressWarnings("ForLoopReplaceableByForEach")
     public final void finishUnmarshalCacheObjects(@Nullable List<? extends CacheObject> col,
         GridCacheContext ctx,
-        ClassLoader ldr)
-        throws IgniteCheckedException
-    {
+        ClassLoader ldr
+    ) throws IgniteCheckedException {
         if (col == null)
             return;
 
@@ -610,9 +611,8 @@ public abstract class GridCacheMessage implements Message {
      */
     protected final void finishUnmarshalCacheObjects(@Nullable Collection<? extends CacheObject> col,
         GridCacheContext ctx,
-        ClassLoader ldr)
-        throws IgniteCheckedException
-    {
+        ClassLoader ldr
+    ) throws IgniteCheckedException {
         if (col == null)
             return;
 
@@ -656,7 +656,7 @@ public abstract class GridCacheMessage implements Message {
      * @param ctx Context.
      * @return Logger.
      */
-    public IgniteLogger messageLogger(GridCacheSharedContext ctx) {
+    public IgniteLogger messageLogger(GridCacheSharedContext<?, ?> ctx) {
         return ctx.messageLogger();
     }
 

@@ -17,6 +17,8 @@
 
 package org.apache.ignite.internal.processors.query.calcite.prepare;
 
+import org.jetbrains.annotations.Nullable;
+
 /**
  * Distributed dml plan.
  */
@@ -24,8 +26,14 @@ public class MultiStepDmlPlan extends AbstractMultiStepPlan {
     /**
      * @param fieldsMeta Fields metadata.
      */
-    public MultiStepDmlPlan(QueryTemplate queryTemplate, FieldsMetadata fieldsMeta) {
-        super(queryTemplate, fieldsMeta);
+    public MultiStepDmlPlan(
+        String qry,
+        String textPlan,
+        QueryTemplate queryTemplate,
+        FieldsMetadata fieldsMeta,
+        @Nullable FieldsMetadata paramsMetadata
+    ) {
+        super(qry, textPlan, queryTemplate, fieldsMeta, paramsMetadata);
     }
 
     /** {@inheritDoc} */
@@ -35,6 +43,6 @@ public class MultiStepDmlPlan extends AbstractMultiStepPlan {
 
     /** {@inheritDoc} */
     @Override public QueryPlan copy() {
-        return new MultiStepDmlPlan(queryTemplate, fieldsMetadata);
+        return new MultiStepDmlPlan(query(), textPlan(), queryTemplate, fieldsMetadata, paramsMetadata);
     }
 }

@@ -560,6 +560,13 @@ public abstract class PagesList extends DataStructure {
     }
 
     /**
+     * Gets per page free space for specified bucket.
+     *
+     * @return Free space available to use for each page in specified bucket.
+     */
+    public abstract int getPageFreeSpace(int bucket);
+
+    /**
      * Gets bucket index by page freespace.
      *
      * @return Bucket index or -1 if page doesn't belong to any bucket.
@@ -2320,7 +2327,7 @@ public abstract class PagesList extends DataStructure {
          * @param tailId Tail ID.
          * @param empty Empty flag.
          */
-        Stripe(long tailId, boolean empty) {
+        public Stripe(long tailId, boolean empty) {
             this.tailId = tailId;
             this.empty = empty;
         }

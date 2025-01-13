@@ -27,18 +27,22 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ThreadLocalRandom;
 import javax.cache.Cache;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteDataStreamer;
+import org.apache.ignite.IgniteException;
 import org.apache.ignite.cache.CachePeekMode;
 import org.apache.ignite.cache.affinity.Affinity;
 import org.apache.ignite.cache.query.QueryCursor;
 import org.apache.ignite.cache.query.ScanQuery;
 import org.apache.ignite.cache.query.SqlFieldsQuery;
 import org.apache.ignite.cache.query.SqlQuery;
+import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.configuration.NearCacheConfiguration;
+import org.apache.ignite.failure.FailureHandler;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.processors.cache.GridCacheAdapter;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearCacheAdapter;
@@ -47,10 +51,14 @@ import org.apache.ignite.internal.util.typedef.PA;
 import org.apache.ignite.internal.util.typedef.X;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.GridTestUtils.SF;
-import org.apache.ignite.testframework.MvccFeatureChecker;
 import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Test;
+
+import static org.apache.ignite.configuration.DataStorageConfiguration.DFLT_WAL_SEGMENT_SIZE;
+import static org.apache.ignite.testframework.GridTestUtils.assertThrows;
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.is;
 
 /**
  *
@@ -58,6 +66,12 @@ import org.junit.Test;
 public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
     /** */
     private static final int KEYS_COUNT = SF.applyLB(10_000, 2_000);
+
+    /** Index of Ignite node with a reduced WAL buffer size. */
+    private static final int smallWalBufSizeNodeIdx = 0;
+
+    /** Set of nodes that indicates system critical failure on a particular node. */
+    private final Set<String> failedNodes = new ConcurrentSkipListSet<>();
 
     /**
      * @return Ignite instance for testing.
@@ -67,6 +81,27 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
             return grid(gridCount());
 
         return grid(0);
+    }
+
+    /** {@inheritDoc} */
+    @Override protected IgniteConfiguration getConfiguration(String gridName) throws Exception {
+        IgniteConfiguration cfg = super.getConfiguration(gridName);
+
+        if (getTestIgniteInstanceIndex(gridName) == smallWalBufSizeNodeIdx) {
+            cfg.getDataStorageConfiguration()
+                .setWalBufferSize(DFLT_WAL_SEGMENT_SIZE / 4)
+                .setWalSegmentSize(DFLT_WAL_SEGMENT_SIZE / 4);
+        }
+
+        return cfg;
+    }
+
+    /** {@inheritDoc} */
+    @Override protected FailureHandler getFailureHandler(String igniteInstanceName) {
+        return (ignite, failureCtx) -> {
+            failedNodes.add(ignite.name());
+            return true;
+        };
     }
 
     /**
@@ -274,6 +309,58 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
     }
 
     /**
+     * Tests that putting a large entry, which size is greater than WAL buffer/segment size, results in CacheException.
+     *
+     * @throws Exception If failed.
+     */
+    @Test
+    public void testPutLargeEntry() throws Exception {
+        assertTrue(
+            "Primary key should correspond to the node with small wal buffer size.",
+            smallWalBufSizeNodeIdx == 0);
+
+        IgniteCache<Integer, byte[]> atomicCache = grid(0).cache("atomic");
+        Integer atomicPrimaryKey = primaryKey(atomicCache);
+
+        // New value which is greater than WAL segment size / WAL buffer.
+        byte[] newVal = new byte[DFLT_WAL_SEGMENT_SIZE / 2];
+
+        assertThrows(
+            log,
+            () -> atomicCache.put(atomicPrimaryKey, newVal),
+            IgniteException.class,
+            null);
+        assertNull("Unexpected non-null value.", atomicCache.get(atomicPrimaryKey));
+        assertTrue("Unexpected system critical error.", failedNodes.isEmpty());
+
+        // Check backup scenario.
+        if (gridCount() > 1) {
+            Integer atomicBackupKey = backupKey(atomicCache);
+            Ignite primaryNode = primaryNode(atomicBackupKey, atomicCache.getName());
+
+            // Primary node should be updated successfully,
+            // however, backup node should fail because of size of the new entry does not allow to write it to WAL.
+            assertThrows(
+                log,
+                () -> atomicCache.put(atomicBackupKey, newVal),
+                IgniteException.class,
+                "Failed to update keys");
+
+            assertThat(
+                "Unexpected value.",
+                primaryNode.cache(atomicCache.getName()).get(atomicBackupKey),
+                is(newVal));
+
+            assertThat(
+                "Failure handler was not triggered on backup node.",
+                failedNodes,
+                hasItem(grid(0).name()));
+
+            assertFalse("Unexpected system critical error(s).", failedNodes.size() > 1);
+        }
+    }
+
+    /**
      * @throws Exception If failed.
      */
     @Test
@@ -467,8 +554,6 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
      */
     @Test
     public void testSizeClear() throws Exception {
-        Assume.assumeFalse("https://issues.apache.org/jira/browse/IGNITE-7952", MvccFeatureChecker.forcedMvcc());
-
         final IgniteCache<Integer, DbValue> cache = cache(DEFAULT_CACHE_NAME);
 
         GridCacheAdapter<Integer, DbValue> internalCache = internalCache(cache);
@@ -676,14 +761,14 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
 
     /** */
     private static int[] generateUniqueRandomKeys(int cnt, Random rnd) {
-        int[] keys = new int[cnt];
+        Integer[] keys = new Integer[cnt];
 
         for (int i = 0; i < cnt; i++)
             keys[i] = i;
 
-        Collections.shuffle(Arrays.asList(keys));
+        Collections.shuffle(Arrays.asList(keys), rnd);
 
-        return keys;
+        return Arrays.stream(keys).mapToInt(x -> x).toArray();
     }
 
     /**
@@ -836,7 +921,7 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
 
         long seed = System.currentTimeMillis();
 
-        int iterations = SF.apply(MvccFeatureChecker.forcedMvcc() ? 30_000 : 90_000);
+        int iterations = SF.apply(90_000);
 
         X.println("Seed: " + seed);
 
@@ -1075,7 +1160,7 @@ public abstract class IgniteDbPutGetAbstractTest extends IgniteDbAbstractTest {
 
             int cnt = 0;
 
-            for (Cache.Entry<DbKey, DbValue> e : cache0.localEntries()) {
+            for (Cache.Entry<DbKey, DbValue> e : cache0.localEntries(CachePeekMode.PRIMARY)) {
                 cnt++;
 
                 allKeys.add(e.getKey());

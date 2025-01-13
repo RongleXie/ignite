@@ -42,7 +42,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Handler;
-import java.util.stream.Collectors;
 import javax.management.JMException;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
@@ -74,7 +73,6 @@ import org.apache.ignite.configuration.TransactionConfiguration;
 import org.apache.ignite.failure.FailureContext;
 import org.apache.ignite.failure.FailureType;
 import org.apache.ignite.internal.binary.BinaryArray;
-import org.apache.ignite.internal.binary.BinaryMarshaller;
 import org.apache.ignite.internal.managers.discovery.GridDiscoveryManager;
 import org.apache.ignite.internal.processors.cache.CacheGroupContext;
 import org.apache.ignite.internal.processors.cache.distributed.dht.preloader.GridDhtPartitionFullMap;
@@ -104,9 +102,6 @@ import org.apache.ignite.internal.util.worker.GridWorker;
 import org.apache.ignite.internal.worker.WorkersRegistry;
 import org.apache.ignite.lang.IgniteBiInClosure;
 import org.apache.ignite.lang.IgniteBiTuple;
-import org.apache.ignite.marshaller.Marshaller;
-import org.apache.ignite.marshaller.MarshallerUtils;
-import org.apache.ignite.marshaller.jdk.JdkMarshaller;
 import org.apache.ignite.mxbean.IgnitionMXBean;
 import org.apache.ignite.plugin.segmentation.SegmentationPolicy;
 import org.apache.ignite.resources.SpringApplicationContextResource;
@@ -124,6 +119,7 @@ import org.apache.ignite.spi.failover.always.AlwaysFailoverSpi;
 import org.apache.ignite.spi.indexing.noop.NoopIndexingSpi;
 import org.apache.ignite.spi.loadbalancing.LoadBalancingSpi;
 import org.apache.ignite.spi.loadbalancing.roundrobin.RoundRobinLoadBalancingSpi;
+import org.apache.ignite.spi.metric.jmx.JmxMetricExporterSpi;
 import org.apache.ignite.spi.metric.noop.NoopMetricExporterSpi;
 import org.apache.ignite.spi.tracing.NoopTracingSpi;
 import org.apache.ignite.thread.IgniteThread;
@@ -150,6 +146,9 @@ import static org.apache.ignite.cache.CacheWriteSynchronizationMode.FULL_SYNC;
 import static org.apache.ignite.configuration.MemoryConfiguration.DFLT_MEMORY_POLICY_MAX_SIZE;
 import static org.apache.ignite.configuration.MemoryConfiguration.DFLT_MEM_PLC_DEFAULT_NAME;
 import static org.apache.ignite.internal.IgniteComponentType.SPRING;
+import static org.apache.ignite.internal.processors.task.TaskExecutionOptions.options;
+import static org.apache.ignite.internal.util.IgniteUtils.EMPTY_STRS;
+import static org.apache.ignite.internal.util.IgniteUtils.IGNITE_MBEANS_DISABLED;
 import static org.apache.ignite.plugin.segmentation.SegmentationPolicy.RESTART_JVM;
 
 /**
@@ -202,13 +201,6 @@ public class IgnitionEx {
     private static final Collection<IgnitionListener> lsnrs = new GridConcurrentHashSet<>(4);
 
     /** */
-    private static ThreadLocal<Boolean> daemon = new ThreadLocal<Boolean>() {
-        @Override protected Boolean initialValue() {
-            return false;
-        }
-    };
-
-    /** */
     private static ThreadLocal<Boolean> clientMode = new ThreadLocal<>();
 
     /** Dependency container. */
@@ -219,34 +211,6 @@ public class IgnitionEx {
      */
     private IgnitionEx() {
         // No-op.
-    }
-
-    /**
-     * Sets daemon flag.
-     * <p>
-     * If daemon flag is set then all grid instances created by the factory will be
-     * daemon, i.e. the local node for these instances will be a daemon node. Note that
-     * if daemon flag is set - it will override the same settings in {@link IgniteConfiguration#isDaemon()}.
-     * Note that you can set on and off daemon flag at will.
-     *
-     * @param daemon Daemon flag to set.
-     */
-    public static void setDaemon(boolean daemon) {
-        IgnitionEx.daemon.set(daemon);
-    }
-
-    /**
-     * Gets daemon flag.
-     * <p>
-     * If daemon flag it set then all grid instances created by the factory will be
-     * daemon, i.e. the local node for these instances will be a daemon node. Note that
-     * if daemon flag is set - it will override the same settings in {@link IgniteConfiguration#isDaemon()}.
-     * Note that you can set on and off daemon flag at will.
-     *
-     * @return Daemon flag.
-     */
-    public static boolean isDaemon() {
-        return daemon.get();
     }
 
     /**
@@ -906,23 +870,7 @@ public class IgnitionEx {
         @Nullable GridSpringResourceContext springCtx, @Nullable ClassLoader ldr) throws IgniteCheckedException {
         A.notNull(springCfgUrl, "springCfgUrl");
 
-        boolean isLog4jUsed = U.gridClassLoader().getResource("org/apache/log4j/Appender.class") != null;
-
-        IgniteBiTuple<Object, Object> t = null;
-
-        if (isLog4jUsed) {
-            try {
-                t = U.addLog4jNoOpLogger();
-            }
-            catch (IgniteCheckedException ignore) {
-                isLog4jUsed = false;
-            }
-        }
-
-        Collection<Handler> savedHnds = null;
-
-        if (!isLog4jUsed)
-            savedHnds = U.addJavaNoOpLogger();
+        Collection<Handler> savedHnds = U.addJavaNoOpLogger();
 
         IgniteBiTuple<Collection<IgniteConfiguration>, ? extends GridSpringResourceContext> cfgMap;
 
@@ -930,11 +878,7 @@ public class IgnitionEx {
             cfgMap = loadConfigurations(springCfgUrl);
         }
         finally {
-            if (isLog4jUsed && t != null)
-                U.removeLog4jNoOpLogger(t);
-
-            if (!isLog4jUsed)
-                U.removeJavaNoOpLogger(savedHnds);
+            U.removeJavaNoOpLogger(savedHnds);
         }
 
         return startConfigurations(cfgMap, springCfgUrl, igniteInstanceName, springCtx, ldr);
@@ -986,23 +930,7 @@ public class IgnitionEx {
         @Nullable GridSpringResourceContext springCtx, @Nullable ClassLoader ldr) throws IgniteCheckedException {
         A.notNull(springCfgStream, "springCfgUrl");
 
-        boolean isLog4jUsed = U.gridClassLoader().getResource("org/apache/log4j/Appender.class") != null;
-
-        IgniteBiTuple<Object, Object> t = null;
-
-        if (isLog4jUsed) {
-            try {
-                t = U.addLog4jNoOpLogger();
-            }
-            catch (IgniteCheckedException ignore) {
-                isLog4jUsed = false;
-            }
-        }
-
-        Collection<Handler> savedHnds = null;
-
-        if (!isLog4jUsed)
-            savedHnds = U.addJavaNoOpLogger();
+        Collection<Handler> savedHnds = U.addJavaNoOpLogger();
 
         IgniteBiTuple<Collection<IgniteConfiguration>, ? extends GridSpringResourceContext> cfgMap;
 
@@ -1010,11 +938,7 @@ public class IgnitionEx {
             cfgMap = loadConfigurations(springCfgStream);
         }
         finally {
-            if (isLog4jUsed && t != null)
-                U.removeLog4jNoOpLogger(t);
-
-            if (!isLog4jUsed)
-                U.removeJavaNoOpLogger(savedHnds);
+            U.removeJavaNoOpLogger(savedHnds);
         }
 
         return startConfigurations(cfgMap, null, igniteInstanceName, springCtx, ldr);
@@ -1591,9 +1515,6 @@ public class IgnitionEx {
         private static final Map<MBeanServer, GridMBeanServerData> mbeans =
             new HashMap<>();
 
-        /** */
-        private static final String[] EMPTY_STR_ARR = new String[0];
-
         /** Grid name. */
         private final String name;
 
@@ -1955,10 +1876,6 @@ public class IgnitionEx {
 
             myCfg.setLocalHost(F.isEmpty(locHost) ? myCfg.getLocalHost() : locHost);
 
-            // Override daemon flag if it was set on the factory.
-            if (daemon.get())
-                myCfg.setDaemon(true);
-
             if (myCfg.isClientMode() == null) {
                 Boolean threadClient = clientMode.get();
 
@@ -1992,29 +1909,12 @@ public class IgnitionEx {
             }
 
             if (myCfg.getUserAttributes() == null)
-                myCfg.setUserAttributes(Collections.<String, Object>emptyMap());
+                myCfg.setUserAttributes(Collections.emptyMap());
 
             initializeDefaultMBeanServer(myCfg);
 
-            Marshaller marsh = myCfg.getMarshaller();
-
-            if (marsh == null) {
-                if (!BinaryMarshaller.available()) {
-                    U.warn(log, "Standard BinaryMarshaller can't be used on this JVM. " +
-                        "Switch to HotSpot JVM or reach out Apache Ignite community for recommendations.");
-
-                    marsh = new JdkMarshaller();
-                }
-                else
-                    marsh = new BinaryMarshaller();
-            }
-
-            MarshallerUtils.setNodeName(marsh, cfg.getIgniteInstanceName());
-
-            myCfg.setMarshaller(marsh);
-
             if (myCfg.getPeerClassLoadingLocalClassPathExclude() == null)
-                myCfg.setPeerClassLoadingLocalClassPathExclude(EMPTY_STR_ARR);
+                myCfg.setPeerClassLoadingLocalClassPathExclude(EMPTY_STRS);
 
             initializeDefaultSpi(myCfg);
 
@@ -2154,8 +2054,11 @@ public class IgnitionEx {
             if (cfg.getEncryptionSpi() == null)
                 cfg.setEncryptionSpi(new NoopEncryptionSpi());
 
-            if (F.isEmpty(cfg.getMetricExporterSpi()))
-                cfg.setMetricExporterSpi(new NoopMetricExporterSpi());
+            if (F.isEmpty(cfg.getMetricExporterSpi())) {
+                cfg.setMetricExporterSpi(IGNITE_MBEANS_DISABLED
+                    ? new NoopMetricExporterSpi()
+                    : new JmxMetricExporterSpi());
+            }
 
             if (cfg.getTracingSpi() == null)
                 cfg.setTracingSpi(new NoopTracingSpi());
@@ -2251,7 +2154,7 @@ public class IgnitionEx {
                 }
             }
 
-            if (shutdown == ShutdownPolicy.GRACEFUL && !grid.context().clientNode() && grid.cluster().active()) {
+            if (shutdown == ShutdownPolicy.GRACEFUL && !grid.context().clientNode() && grid.cluster().state().active()) {
                 delayedShutdown = true;
 
                 if (log.isInfoEnabled())
@@ -2284,7 +2187,7 @@ public class IgnitionEx {
                     Map<UUID, Map<Integer, Set<Integer>>> proposedSuppliers = new HashMap<>();
 
                     for (CacheGroupContext grpCtx : grid.context().cache().cacheGroups()) {
-                        if (grpCtx.isLocal() || grpCtx.systemCache())
+                        if (grpCtx.systemCache())
                             continue;
 
                         if (grpCtx.config().getCacheMode() == PARTITIONED && grpCtx.config().getBackups() == 0) {
@@ -2338,14 +2241,17 @@ public class IgnitionEx {
                         safeToStop = false;
 
                     if (safeToStop && !proposedSuppliers.isEmpty()) {
-                        Set<UUID> supportedPolicyNodes = proposedSuppliers.keySet().stream()
-                            .filter(nodeId ->
-                                IgniteFeatures.nodeSupports(grid0.cluster().node(nodeId), IgniteFeatures.SHUTDOWN_POLICY))
-                            .collect(Collectors.toSet());
+                        try {
+                            safeToStop = grid0.context().task().execute(
+                                CheckCpHistTask.class,
+                                proposedSuppliers,
+                                options(grid0.cluster().forNodeIds(proposedSuppliers.keySet()).nodes())
+                            ).get();
+                        }
+                        catch (IgniteCheckedException e) {
+                            U.error(log, "Failed to check availability of historical rebalance", e);
 
-                        if (!supportedPolicyNodes.isEmpty()) {
-                            safeToStop = grid0.compute(grid0.cluster().forNodeIds(supportedPolicyNodes))
-                                .execute(CheckCpHistTask.class, proposedSuppliers);
+                            safeToStop = false;
                         }
                     }
 
@@ -2423,22 +2329,22 @@ public class IgnitionEx {
             if (fullMap == null)
                 return false;
 
-            UUID localNodeId = grid.localNodeId();
+            UUID locNodeId = grid.localNodeId();
 
-            GridDhtPartitionMap localPartMap = fullMap.get(localNodeId);
+            GridDhtPartitionMap locPartMap = fullMap.get(locNodeId);
 
             int parts = grpCtx.topology().partitions();
 
             List<List<ClusterNode>> idealAssignment = grpCtx.affinity().idealAssignmentRaw();
 
             for (int p = 0; p < parts; p++) {
-                if (localPartMap.get(p) != GridDhtPartitionState.OWNING)
+                if (locPartMap.get(p) != GridDhtPartitionState.OWNING)
                     continue;
 
                 boolean foundCopy = false;
 
                 for (Map.Entry<UUID, GridDhtPartitionMap> entry : fullMap.entrySet()) {
-                    if (localNodeId.equals(entry.getKey()) || nodesToExclude.contains(entry.getKey()))
+                    if (locNodeId.equals(entry.getKey()) || nodesToExclude.contains(entry.getKey()))
                         continue;
 
                     //This remote node does not present in ideal assignment.
@@ -2493,7 +2399,7 @@ public class IgnitionEx {
          * @throws IgniteCheckedException If registration failed.
          */
         private void registerFactoryMbean(MBeanServer srv) throws IgniteCheckedException {
-            if (U.IGNITE_MBEANS_DISABLED)
+            if (IGNITE_MBEANS_DISABLED)
                 return;
 
             assert srv != null;
@@ -2548,7 +2454,7 @@ public class IgnitionEx {
          * Unregister delegate Mbean instance for {@link Ignition}.
          */
         private void unregisterFactoryMBean() {
-            if (U.IGNITE_MBEANS_DISABLED)
+            if (IGNITE_MBEANS_DISABLED)
                 return;
 
             synchronized (mbeans) {
@@ -2678,7 +2584,7 @@ public class IgnitionEx {
 
     /** Initialize default mbean server. */
     public static void initializeDefaultMBeanServer(IgniteConfiguration myCfg) {
-        if (myCfg.getMBeanServer() == null && !U.IGNITE_MBEANS_DISABLED)
+        if (myCfg.getMBeanServer() == null && !IGNITE_MBEANS_DISABLED)
             myCfg.setMBeanServer(ManagementFactory.getPlatformMBeanServer());
     }
 
@@ -2740,7 +2646,8 @@ public class IgnitionEx {
                     customDfltPlc = true;
 
                     dsCfg.setDefaultDataRegionConfiguration(region);
-                } else
+                }
+                else
                     optionalDataRegions.add(region);
             }
         }
@@ -2759,7 +2666,8 @@ public class IgnitionEx {
                 .setMaxSize(memCfg.getDefaultMemoryPolicySize())
                 .setName(memCfg.getDefaultMemoryPolicyName())
                 .setPersistenceEnabled(persistenceEnabled));
-        } else {
+        }
+        else {
             if (memCfg.getDefaultMemoryPolicySize() != DFLT_MEMORY_POLICY_MAX_SIZE)
                 throw new IgniteCheckedException(new IllegalArgumentException("User-defined MemoryPolicy " +
                     "configuration and defaultMemoryPolicySize properties are set at the same time."));

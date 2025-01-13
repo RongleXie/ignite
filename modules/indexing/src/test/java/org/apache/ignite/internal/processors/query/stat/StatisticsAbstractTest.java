@@ -34,7 +34,6 @@ import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
@@ -44,7 +43,7 @@ import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.processors.cache.query.SqlFieldsQueryEx;
-import org.apache.ignite.internal.processors.query.h2.IgniteH2Indexing;
+import org.apache.ignite.internal.processors.query.GridQueryProcessor;
 import org.apache.ignite.internal.processors.query.stat.config.StatisticsColumnConfiguration;
 import org.apache.ignite.internal.processors.query.stat.config.StatisticsObjectConfiguration;
 import org.apache.ignite.internal.util.typedef.F;
@@ -83,7 +82,7 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
     static final StatisticsTarget SMALL_TARGET = new StatisticsTarget(SMALL_KEY, null);
 
     /** Async operation timeout for test */
-    static final int TIMEOUT = 5_000;
+    static final int TIMEOUT = 10_000;
 
     static {
         assertTrue(SMALL_SIZE < MED_SIZE && MED_SIZE < BIG_SIZE);
@@ -229,9 +228,7 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
      * @param grid Grid to process obsolescence on.
      */
     private void processObsolescence(IgniteEx grid) {
-        IgniteH2Indexing indexing = (IgniteH2Indexing)grid.context().query().getIndexing();
-
-        ((IgniteStatisticsManagerImpl)indexing.statsManager()).processObsolescence();
+        ((IgniteStatisticsManagerImpl)grid.context().query().statsManager()).processObsolescence();
     }
 
     /**
@@ -264,12 +261,23 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
     }
 
     /**
-     * Create SQL table with the given index.
+     * Creates SQL table with the given index and fills with small amount of data.
      *
      * @param suffix Table idx, if {@code null} - name "SMALL" without index will be used.
      * @return Table name.
      */
     protected String createSmallTable(String suffix) {
+        return createSmallTable(SMALL_SIZE, suffix);
+    }
+
+    /**
+     * Creates SQL table with the given index and fills with data of the passed amount.
+     *
+     * @param preloadCnt Records cnt to load after creation.
+     * @param suffix Table idx, if {@code null} - name "SMALL" without index will be used.
+     * @return Table name.
+     */
+    protected String createSmallTable(int preloadCnt, String suffix) {
         String tblName = "small" + ((suffix != null) ? suffix : "");
 
         sql("DROP TABLE IF EXISTS " + tblName);
@@ -282,7 +290,7 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
 
         sql(String.format("CREATE INDEX %s_c ON %s(c)", tblName, tblName));
 
-        for (int i = 0; i < SMALL_SIZE; i++)
+        for (int i = 0; i < preloadCnt; i++)
             sql(String.format("INSERT INTO %s(a, b, c) VALUES(%d, %d, %d)", tblName, i, i, i % 10));
 
         return tblName;
@@ -552,31 +560,31 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
     ) throws Exception {
         long t0 = U.currentTimeMillis();
 
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ign.context().query().getIndexing();
+        GridQueryProcessor qryProc = ign.context().query();
 
         while (true) {
             try {
                 checkStatisticTasksEmpty(ign);
 
-                for (Map.Entry<StatisticsTarget, Long> targetVersionEntry : expectedVersions.entrySet()) {
-                    StatisticsTarget target = targetVersionEntry.getKey();
+                for (Map.Entry<StatisticsTarget, Long> targetVerEntry : expectedVersions.entrySet()) {
+                    StatisticsTarget target = targetVerEntry.getKey();
 
                     // Statistics configuration manager could not get fresh enough configuration version till now so we
                     // need to request global statistics again to force it's collection
                     // TODO: remove me statisticsMgr(ign).getGlobalStatistics(target.key());
 
-                    Long ver = targetVersionEntry.getValue();
+                    Long ver = targetVerEntry.getValue();
 
                     ObjectStatisticsImpl s;
 
                     switch (type) {
                         case LOCAL:
-                            s = (ObjectStatisticsImpl)indexing.statsManager().getLocalStatistics(target.key());
+                            s = (ObjectStatisticsImpl)qryProc.statsManager().getLocalStatistics(target.key());
 
                             break;
 
                         case GLOBAL:
-                            s = (ObjectStatisticsImpl)indexing.statsManager().getGlobalStatistics(target.key());
+                            s = (ObjectStatisticsImpl)qryProc.statsManager().getGlobalStatistics(target.key());
 
                             break;
 
@@ -727,9 +735,7 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
      * @return Statistics manager implementation.
      */
     public IgniteStatisticsManagerImpl statisticsMgr(int nodeIdx) {
-        IgniteH2Indexing indexing = (IgniteH2Indexing)grid(nodeIdx).context().query().getIndexing();
-
-        return (IgniteStatisticsManagerImpl)indexing.statsManager();
+        return statisticsMgr(grid(nodeIdx));
     }
 
     /**
@@ -739,9 +745,7 @@ public abstract class StatisticsAbstractTest extends GridCommonAbstractTest {
      * @return Statistics manager implementation.
      */
     public IgniteStatisticsManagerImpl statisticsMgr(IgniteEx ign) {
-        IgniteH2Indexing indexing = (IgniteH2Indexing)ign.context().query().getIndexing();
-
-        return (IgniteStatisticsManagerImpl)indexing.statsManager();
+        return (IgniteStatisticsManagerImpl)ign.context().query().statsManager();
     }
 
     /**

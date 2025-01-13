@@ -18,17 +18,14 @@
 package org.apache.ignite.internal.processors.query.stat;
 
 import java.util.function.Predicate;
-
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInterruptedCheckedException;
 import org.apache.ignite.internal.processors.query.IgniteSQLException;
-import org.apache.ignite.internal.processors.query.h2.IgniteH2Indexing;
 import org.apache.ignite.internal.util.typedef.G;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.testframework.GridTestUtils;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import static org.apache.ignite.testframework.GridTestUtils.waitForCondition;
@@ -36,7 +33,6 @@ import static org.apache.ignite.testframework.GridTestUtils.waitForCondition;
 /**
  * Integration tests for statistics collection.
  */
-@Ignore("https://issues.apache.org/jira/browse/IGNITE-15455")
 public class SqlStatisticsCommandTests extends StatisticsAbstractTest {
     /** {@inheritDoc} */
     @Override protected void beforeTestsStarted() throws Exception {
@@ -263,11 +259,10 @@ public class SqlStatisticsCommandTests extends StatisticsAbstractTest {
     private void testStatistics(String schema, String obj, boolean isNull) throws IgniteInterruptedCheckedException {
         assertTrue("Unable to wait statistics by " + schema + "." + obj + " if null=" + isNull, waitForCondition(() -> {
             for (Ignite node : G.allGrids()) {
-                IgniteH2Indexing indexing = (IgniteH2Indexing)((IgniteEx)node).context().query().getIndexing();
+                ObjectStatistics locStat = ((IgniteEx)node).context().query().statsManager()
+                    .getLocalStatistics(new StatisticsKey(schema, obj));
 
-                ObjectStatistics localStat = indexing.statsManager().getLocalStatistics(new StatisticsKey(schema, obj));
-
-                if (!(isNull == (localStat == null)))
+                if (!(isNull == (locStat == null)))
                     return false;
             }
             return true;
@@ -283,13 +278,10 @@ public class SqlStatisticsCommandTests extends StatisticsAbstractTest {
     private void testStatisticsVersion(String schema, String obj, Predicate<Long> verChecker) throws IgniteInterruptedCheckedException {
         assertTrue(waitForCondition(() -> {
             for (Ignite node : G.allGrids()) {
-                IgniteH2Indexing indexing = (IgniteH2Indexing)((IgniteEx)node).context().query().getIndexing();
+                ObjectStatisticsImpl locStat = (ObjectStatisticsImpl)((IgniteEx)node).context().query().statsManager()
+                    .getLocalStatistics(new StatisticsKey(schema, obj));
 
-                ObjectStatisticsImpl localStat = (ObjectStatisticsImpl)indexing.statsManager().getLocalStatistics(
-                    new StatisticsKey(schema, obj)
-                );
-
-                long sumVer = localStat.columnsStatistics().values().stream()
+                long sumVer = locStat.columnsStatistics().values().stream()
                     .mapToLong(ColumnStatistics::version)
                     .sum();
 
@@ -305,13 +297,13 @@ public class SqlStatisticsCommandTests extends StatisticsAbstractTest {
      * Get average version of the column statistics for specified DB object.
      */
     long sumStatisticsVersion(String schema, String obj) {
-        ObjectStatisticsImpl localStat = (ObjectStatisticsImpl)statisticsMgr(0)
+        ObjectStatisticsImpl locStat = (ObjectStatisticsImpl)statisticsMgr(0)
             .getLocalStatistics(new StatisticsKey(schema, obj));
 
-        if (localStat == null)
+        if (locStat == null)
             return -1;
 
-        return localStat.columnsStatistics().values().stream()
+        return locStat.columnsStatistics().values().stream()
             .mapToLong(ColumnStatistics::version)
             .sum();
     }

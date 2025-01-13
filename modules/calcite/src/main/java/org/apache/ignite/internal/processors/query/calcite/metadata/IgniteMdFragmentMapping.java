@@ -33,6 +33,8 @@ import org.apache.ignite.internal.processors.query.calcite.metadata.IgniteMetada
 import org.apache.ignite.internal.processors.query.calcite.prepare.MappingQueryContext;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteExchange;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteFilter;
+import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexBound;
+import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexCount;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteIndexScan;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteReceiver;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteTableFunctionScan;
@@ -157,7 +159,7 @@ public class IgniteMdFragmentMapping implements MetadataHandler<FragmentMappingM
      * Prunes involved partitions (hence nodes, involved in query execution) if possible.
      */
     public FragmentMapping fragmentMapping(IgniteFilter rel, RelMetadataQuery mq, MappingQueryContext ctx) {
-        return _fragmentMapping(rel.getInput(), mq, ctx).prune(rel);
+        return _fragmentMapping(rel.getInput(), mq, ctx);
     }
 
     /**
@@ -186,6 +188,22 @@ public class IgniteMdFragmentMapping implements MetadataHandler<FragmentMappingM
      * See {@link IgniteMdFragmentMapping#fragmentMapping(RelNode, RelMetadataQuery, MappingQueryContext)}
      */
     public FragmentMapping fragmentMapping(IgniteIndexScan rel, RelMetadataQuery mq, MappingQueryContext ctx) {
+        return FragmentMapping.create(rel.sourceId(),
+            rel.getTable().unwrap(IgniteTable.class).colocationGroup(ctx));
+    }
+
+    /**
+     * See {@link IgniteMdFragmentMapping#fragmentMapping(RelNode, RelMetadataQuery, MappingQueryContext)}
+     */
+    public FragmentMapping fragmentMapping(IgniteIndexCount rel, RelMetadataQuery mq, MappingQueryContext ctx) {
+        return FragmentMapping.create(rel.sourceId(),
+            rel.getTable().unwrap(IgniteTable.class).colocationGroup(ctx));
+    }
+
+    /**
+     * See {@link IgniteMdFragmentMapping#fragmentMapping(RelNode, RelMetadataQuery, MappingQueryContext)}
+     */
+    public FragmentMapping fragmentMapping(IgniteIndexBound rel, RelMetadataQuery mq, MappingQueryContext ctx) {
         return FragmentMapping.create(rel.sourceId(),
             rel.getTable().unwrap(IgniteTable.class).colocationGroup(ctx));
     }

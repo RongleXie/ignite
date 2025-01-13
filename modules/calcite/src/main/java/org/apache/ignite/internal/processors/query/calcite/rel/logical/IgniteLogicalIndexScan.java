@@ -18,16 +18,15 @@
 package org.apache.ignite.internal.processors.query.calcite.rel.logical;
 
 import java.util.List;
-import com.google.common.collect.ImmutableList;
 import org.apache.calcite.plan.RelOptCluster;
 import org.apache.calcite.plan.RelOptTable;
 import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.util.ImmutableBitSet;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.SearchBounds;
 import org.apache.ignite.internal.processors.query.calcite.rel.AbstractIndexScan;
 import org.apache.ignite.internal.processors.query.calcite.schema.IgniteIndex;
 import org.apache.ignite.internal.processors.query.calcite.schema.IgniteTable;
-import org.apache.ignite.internal.processors.query.calcite.util.IndexConditions;
 import org.jetbrains.annotations.Nullable;
 
 /** */
@@ -45,7 +44,7 @@ public class IgniteLogicalIndexScan extends AbstractIndexScan {
         IgniteTable tbl = table.unwrap(IgniteTable.class);
         IgniteIndex idx = tbl.getIndex(idxName);
 
-        IndexConditions idxCond = idx.toIndexCondition(cluster, cond, requiredColumns);
+        List<SearchBounds> searchBounds = idx.toSearchBounds(cluster, cond, requiredColumns);
 
         return new IgniteLogicalIndexScan(
             cluster,
@@ -54,7 +53,7 @@ public class IgniteLogicalIndexScan extends AbstractIndexScan {
             idxName,
             proj,
             cond,
-            idxCond,
+            searchBounds,
             requiredColumns);
     }
 
@@ -66,7 +65,7 @@ public class IgniteLogicalIndexScan extends AbstractIndexScan {
      * @param idxName Index name.
      * @param proj Projects.
      * @param cond Filters.
-     * @param idxCond Index conditions.
+     * @param searchBounds Index search bounds.
      * @param requiredCols Participating columns.
      */
     private IgniteLogicalIndexScan(
@@ -76,9 +75,9 @@ public class IgniteLogicalIndexScan extends AbstractIndexScan {
         String idxName,
         @Nullable List<RexNode> proj,
         @Nullable RexNode cond,
-        @Nullable IndexConditions idxCond,
+        @Nullable List<SearchBounds> searchBounds,
         @Nullable ImmutableBitSet requiredCols
     ) {
-        super(cluster, traits, ImmutableList.of(), tbl, idxName, proj, cond, idxCond, requiredCols);
+        super(cluster, traits, tbl, idxName, proj, cond, searchBounds, requiredCols);
     }
 }

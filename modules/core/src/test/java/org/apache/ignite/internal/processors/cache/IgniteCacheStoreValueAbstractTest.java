@@ -27,19 +27,16 @@ import javax.cache.Cache;
 import javax.cache.integration.CacheLoaderException;
 import javax.cache.integration.CacheWriterException;
 import javax.cache.processor.MutableEntry;
-import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteDataStreamer;
 import org.apache.ignite.cache.CacheEntryProcessor;
 import org.apache.ignite.cache.CacheInterceptorAdapter;
-import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.CachePeekMode;
 import org.apache.ignite.cache.affinity.Affinity;
 import org.apache.ignite.cache.store.CacheStoreAdapter;
 import org.apache.ignite.configuration.CacheConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
-import org.apache.ignite.internal.binary.BinaryMarshaller;
 import org.apache.ignite.internal.binary.BinaryObjectImpl;
 import org.apache.ignite.internal.processors.cache.distributed.near.GridNearCacheAdapter;
 import org.apache.ignite.internal.util.lang.GridAbsPredicate;
@@ -74,8 +71,7 @@ public abstract class IgniteCacheStoreValueAbstractTest extends IgniteCacheAbstr
     @Override protected CacheConfiguration cacheConfiguration(String igniteInstanceName) throws Exception {
         CacheConfiguration ccfg = super.cacheConfiguration(igniteInstanceName);
 
-        if (ccfg.getCacheMode() != CacheMode.LOCAL)
-            assertEquals(1, ccfg.getBackups());
+        assertEquals(1, ccfg.getBackups());
 
         assertTrue(ccfg.isCopyOnRead());
 
@@ -260,20 +256,6 @@ public abstract class IgniteCacheStoreValueAbstractTest extends IgniteCacheAbstr
 
                 assertNotNull(keyObj);
 
-                if (!isBinaryMarshallerUsed(ig)) {
-                    assertNotNull("Unexpected value, node: " + g,
-                        GridTestUtils.getFieldValue(keyObj, CacheObjectAdapter.class, "val"));
-
-                    Object key0 = keyObj.value(cache0.context().cacheObjectContext(), true);
-                    Object key1 = keyObj.value(cache0.context().cacheObjectContext(), false);
-                    Object key2 = keyObj.value(cache0.context().cacheObjectContext(), true);
-                    Object key3 = keyObj.value(cache0.context().cacheObjectContext(), false);
-
-                    assertSame(key0, key1);
-                    assertSame(key1, key2);
-                    assertSame(key2, key3);
-                }
-
                 CacheObject obj = e.rawGet();
 
                 if (obj != null) {
@@ -393,26 +375,9 @@ public abstract class IgniteCacheStoreValueAbstractTest extends IgniteCacheAbstr
 
                 assertNotNull(keyObj);
 
-                if (!isBinaryMarshallerUsed(ig)) {
-                    assertNotNull("Unexpected value, node: " + g,
-                        GridTestUtils.getFieldValue(keyObj, CacheObjectAdapter.class, "val"));
-
-                    Object key0 = keyObj.value(cache0.context().cacheObjectContext(), true);
-                    Object key1 = keyObj.value(cache0.context().cacheObjectContext(), false);
-                    Object key2 = keyObj.value(cache0.context().cacheObjectContext(), true);
-                    Object key3 = keyObj.value(cache0.context().cacheObjectContext(), false);
-
-                    assertSame(key0, key1);
-                    assertSame(key1, key2);
-                    assertSame(key2, key3);
-                }
-
                 CacheObject obj = e.rawGet();
 
                 if (obj != null) {
-                    if (!isBinaryMarshallerUsed(ig))
-                        assertNotNull("Unexpected value, node: " + g, reflectiveValue(obj));
-
                     Object val0 = obj.value(cache0.context().cacheObjectContext(), true);
 
                     assertNotNull("Unexpected value after value() requested1: " + g, reflectiveValue(obj));
@@ -435,15 +400,6 @@ public abstract class IgniteCacheStoreValueAbstractTest extends IgniteCacheAbstr
             else
                 assertFalse("Entry not found, node: " + g, aff.isPrimaryOrBackup(ig.localNode(), key));
         }
-    }
-
-    /**
-     * @param ig Ignite.
-     * @return If binary marshaller is used.
-     */
-    private boolean isBinaryMarshallerUsed(Ignite ig) {
-        return ig.configuration().getMarshaller() == null ||
-            ig.configuration().getMarshaller() instanceof BinaryMarshaller;
     }
 
     /**

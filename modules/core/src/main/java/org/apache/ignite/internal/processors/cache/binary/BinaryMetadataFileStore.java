@@ -46,6 +46,10 @@ import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.internal.util.worker.GridWorker;
 import org.apache.ignite.thread.IgniteThread;
 
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static org.apache.ignite.internal.processors.cache.persistence.file.FilePageStoreManager.TMP_SUFFIX;
+
 /**
  * Class handles saving/restoring binary metadata to/from disk.
  *
@@ -80,35 +84,40 @@ class BinaryMetadataFileStore {
      * @param log Logger.
      * @param binaryMetadataFileStoreDir Path to binary metadata store configured by user, should include binary_meta
      * and consistentId.
+     * @param forceEnabled If {@code true} then will write files even if persistence and CDC disabled.
      */
     BinaryMetadataFileStore(
         final ConcurrentMap<Integer, BinaryMetadataHolder> metadataLocCache,
         final GridKernalContext ctx,
         final IgniteLogger log,
-        final File binaryMetadataFileStoreDir
+        final File binaryMetadataFileStoreDir,
+        final boolean forceEnabled
     ) throws IgniteCheckedException {
         this.metadataLocCache = metadataLocCache;
         this.ctx = ctx;
 
-        enabled = CU.isPersistenceEnabled(ctx.config()) || CU.isCdcEnabled(ctx.config());
+        enabled = forceEnabled || CU.isPersistenceEnabled(ctx.config()) || CU.isCdcEnabled(ctx.config());
 
         this.log = log;
 
         if (!enabled)
             return;
 
-        fileIOFactory = ctx.config().getDataStorageConfiguration().getFileIOFactory();
+        DataStorageConfiguration dsCfg = ctx.config().getDataStorageConfiguration();
+
+        fileIOFactory = dsCfg == null ? new DataStorageConfiguration().getFileIOFactory() : dsCfg.getFileIOFactory();
 
         final String nodeFolderName = ctx.pdsFolderResolver().resolveFolders().folderName();
 
         if (binaryMetadataFileStoreDir != null)
             metadataDir = binaryMetadataFileStoreDir;
-        else
+        else {
             metadataDir = new File(U.resolveWorkDirectory(
                 ctx.config().getWorkDirectory(),
                 DataStorageConfiguration.DFLT_BINARY_METADATA_PATH,
                 false
             ), nodeFolderName);
+        }
 
         fixLegacyFolder(nodeFolderName);
     }
@@ -142,17 +151,24 @@ class BinaryMetadataFileStore {
             return;
 
         try {
-            File file = new File(metadataDir, binMeta.typeId() + ".bin");
+            File file = new File(metadataDir, BinaryUtils.binaryMetaFileName(binMeta.typeId()));
+            File tmpFile = new File(file.getAbsolutePath() + TMP_SUFFIX);
+
+            // TODO: delete it on Ignite start. https://issues.apache.org/jira/browse/IGNITE-20897
+            if (tmpFile.exists())
+                U.delete(tmpFile);
 
             byte[] marshalled = U.marshal(ctx, binMeta);
 
-            try (final FileIO out = fileIOFactory.create(file)) {
+            try (final FileIO out = fileIOFactory.create(tmpFile)) {
                 int left = marshalled.length;
                 while ((left -= out.writeFully(marshalled, 0, Math.min(marshalled.length, left))) > 0)
                     ;
 
                 out.force();
             }
+
+            Files.move(tmpFile.toPath(), file.toPath(), ATOMIC_MOVE, REPLACE_EXISTING);
         }
         catch (Exception e) {
             final String msg = "Failed to save metadata for typeId: " + binMeta.typeId() +
@@ -177,7 +193,9 @@ class BinaryMetadataFileStore {
         if (!enabled)
             return;
 
-        File file = new File(metadataDir, typeId + ".bin");
+        ctx.marshallerContext().unregisterClassNameLocally(typeId);
+
+        File file = new File(metadataDir, BinaryUtils.binaryMetaFileName(typeId));
 
         if (!file.delete()) {
             final String msg = "Failed to remove metadata for typeId: " + typeId;
@@ -201,16 +219,29 @@ class BinaryMetadataFileStore {
         if (!enabled)
             return;
 
-        for (File file : metadataDir.listFiles()) {
-            try (FileInputStream in = new FileInputStream(file)) {
-                BinaryMetadata meta = U.unmarshal(ctx.config().getMarshaller(), in, U.resolveClassLoader(ctx.config()));
+        for (File file : metadataDir.listFiles(BinaryUtils::notTmpFile))
+            restoreMetadata(file);
+    }
 
-                metadataLocCache.put(meta.typeId(), new BinaryMetadataHolder(meta, 0, 0));
-            }
-            catch (Exception e) {
-                U.warn(log, "Failed to restore metadata from file: " + file.getName() +
-                    "; exception was thrown: " + e.getMessage());
-            }
+    /**
+     * Restores single type metadata.
+     *
+     * @param typeId Type identifier.
+     */
+    void restoreMetadata(int typeId) {
+        restoreMetadata(new File(metadataDir, BinaryUtils.binaryMetaFileName(typeId)));
+    }
+
+    /** */
+    private void restoreMetadata(File file) {
+        try (FileInputStream in = new FileInputStream(file)) {
+            BinaryMetadata meta = U.unmarshal(ctx.config().getMarshaller(), in, U.resolveClassLoader(ctx.config()));
+
+            metadataLocCache.put(meta.typeId(), new BinaryMetadataHolder(meta, 0, 0));
+        }
+        catch (Exception e) {
+            U.warn(log, "Failed to restore metadata from file: " + file.getName() +
+                "; exception was thrown: " + e.getMessage());
         }
     }
 
@@ -238,7 +269,7 @@ class BinaryMetadataFileStore {
      * @param typeId typeId of BinaryMetadata to be read.
      */
     private BinaryMetadata readMetadata(int typeId) {
-        File file = new File(metadataDir, Integer.toString(typeId) + ".bin");
+        File file = new File(metadataDir, BinaryUtils.binaryMetaFileName(typeId));
 
         if (!file.exists())
             return null;
@@ -325,7 +356,7 @@ class BinaryMetadataFileStore {
             "binary_meta"
         ), consistendId);
 
-        File legacyTmpDir = new File(legacyDir.toString() + ".tmp");
+        File legacyTmpDir = new File(legacyDir.toString() + TMP_SUFFIX);
 
         if (legacyTmpDir.exists() && !IgniteUtils.delete(legacyTmpDir))
             throw new IgniteCheckedException("Failed to delete legacy binary metadata dir: "
@@ -443,7 +474,7 @@ class BinaryMetadataFileStore {
                     body0();
                 }
                 catch (InterruptedException e) {
-                    if (!isCancelled) {
+                    if (!isCancelled.get()) {
                         ctx.failure().process(new FailureContext(FailureType.SYSTEM_WORKER_TERMINATION, e));
 
                         throw e;

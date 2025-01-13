@@ -71,8 +71,8 @@ public class GridNearTxFinishResponse extends GridDistributedTxFinishResponse {
         long nearThreadId,
         IgniteUuid futId,
         int miniId,
-        @Nullable Throwable err)
-    {
+        @Nullable Throwable err
+    ) {
         super(part, xid, futId);
 
         assert miniId != 0;
@@ -101,9 +101,8 @@ public class GridNearTxFinishResponse extends GridDistributedTxFinishResponse {
         return nearThreadId;
     }
 
-    /** {@inheritDoc}
-     * @param ctx*/
-    @Override public void prepareMarshal(GridCacheSharedContext ctx) throws IgniteCheckedException {
+    /** {@inheritDoc} */
+    @Override public void prepareMarshal(GridCacheSharedContext<?, ?> ctx) throws IgniteCheckedException {
         super.prepareMarshal(ctx);
 
         if (err != null && errBytes == null)
@@ -111,7 +110,7 @@ public class GridNearTxFinishResponse extends GridDistributedTxFinishResponse {
     }
 
     /** {@inheritDoc} */
-    @Override public void finishUnmarshal(GridCacheSharedContext ctx, ClassLoader ldr) throws IgniteCheckedException {
+    @Override public void finishUnmarshal(GridCacheSharedContext<?, ?> ctx, ClassLoader ldr) throws IgniteCheckedException {
         super.finishUnmarshal(ctx, ldr);
 
         if (errBytes != null && err == null)

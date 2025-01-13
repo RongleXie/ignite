@@ -2,11 +2,11 @@ Requirements
 ============
 
 * Oracle JDK 8 or 11
-* .NET Core SDK 3.1
+* .NET 6 SDK
 * JAVA_HOME environment variable set to the corresponding JDK (x64 or x86)
 * Apache Maven bin directory in PATH, or MAVEN_HOME environment variable
 * PowerShell
-* Any OS supported by .NET Core SDK (Linux, Windows, macOS)
+* Any OS supported by .NET SDK (Linux, Windows, macOS)
 
 
 Build Binaries and NuGet
@@ -16,6 +16,15 @@ pwsh build.ps1
 (works on any supported OS)
 
 Resulting binaries will be in bin folder, and NuGet packages in nupkg folder.
+
+Build Apache Ignite .NET with Maven
+===================================
+
+Note that .NET Core SDK 3.1 and PowerShell must be installed first.
+
+The command below will build the binaries and NuGet packages with Maven:
+
+    ./mvnw clean install -am -pl modules/platforms/dotnet -DskipTests -P build-dotnet
 
 
 Solutions and Projects

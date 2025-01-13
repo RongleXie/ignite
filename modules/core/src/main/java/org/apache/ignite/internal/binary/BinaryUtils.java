@@ -17,8 +17,13 @@
 
 package org.apache.ignite.internal.binary;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.Externalizable;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.lang.reflect.Array;
@@ -28,6 +33,7 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.util.ArrayList;
@@ -48,6 +54,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListSet;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.IgniteException;
 import org.apache.ignite.IgniteSystemProperties;
 import org.apache.ignite.binary.BinaryCollectionFactory;
 import org.apache.ignite.binary.BinaryInvalidTypeException;
@@ -60,26 +67,32 @@ import org.apache.ignite.binary.BinaryType;
 import org.apache.ignite.binary.Binarylizable;
 import org.apache.ignite.internal.binary.builder.BinaryLazyValue;
 import org.apache.ignite.internal.binary.streams.BinaryInputStream;
-import org.apache.ignite.internal.processors.cache.CacheObjectByteArrayImpl;
-import org.apache.ignite.internal.processors.cache.CacheObjectImpl;
-import org.apache.ignite.internal.processors.cache.KeyCacheObjectImpl;
-import org.apache.ignite.internal.processors.cacheobject.UserCacheObjectByteArrayImpl;
-import org.apache.ignite.internal.processors.cacheobject.UserCacheObjectImpl;
-import org.apache.ignite.internal.processors.cacheobject.UserKeyCacheObjectImpl;
+import org.apache.ignite.internal.processors.cache.CacheObject;
 import org.apache.ignite.internal.util.MutableSingletonList;
 import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteBiTuple;
 import org.apache.ignite.lang.IgniteUuid;
+import org.apache.ignite.platform.PlatformType;
 import org.jetbrains.annotations.Nullable;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.apache.ignite.IgniteSystemProperties.IGNITE_BINARY_MARSHALLER_USE_STRING_SERIALIZATION_VER_2;
+import static org.apache.ignite.internal.processors.cache.persistence.file.FilePageStoreManager.TMP_SUFFIX;
 
 /**
  * Binary utils.
  */
 public class BinaryUtils {
+    /** Binary metadata file suffix. */
+    public static final String METADATA_FILE_SUFFIX = ".bin";
+
+    /**
+     * Actual file name "{type_id}.classname{platform_id}".
+     * Where {@code type_id} is integer type id and {@code platform_id} is byte from {@link PlatformType}
+     */
+    public static final String MAPPING_FILE_EXTENSION = ".classname";
+
     /** */
     public static final Map<Class<?>, Byte> PLAIN_CLASS_TO_FLAG = new HashMap<>();
 
@@ -141,7 +154,7 @@ public class BinaryUtils {
         !IgniteSystemProperties.getBoolean(IgniteSystemProperties.IGNITE_BINARY_DONT_WRAP_TREE_STRUCTURES);
 
     /** Whether to sort field in binary objects (doesn't affect Binarylizable). */
-    public static final boolean FIELDS_SORTED_ORDER =
+    public static boolean FIELDS_SORTED_ORDER =
         IgniteSystemProperties.getBoolean(IgniteSystemProperties.IGNITE_BINARY_SORT_OBJECT_FIELDS);
 
     /** Field type names. */
@@ -719,19 +732,7 @@ public class BinaryUtils {
      * @return True if this is an object of a known type.
      */
     public static boolean knownCacheObject(Object obj) {
-        if (obj == null)
-            return false;
-
-        Class<?> cls = obj.getClass();
-
-        return cls == KeyCacheObjectImpl.class ||
-            cls == BinaryObjectImpl.class ||
-            cls == CacheObjectImpl.class ||
-            cls == CacheObjectByteArrayImpl.class ||
-            cls == BinaryEnumObjectImpl.class ||
-            cls == UserKeyCacheObjectImpl.class ||
-            cls == UserCacheObjectImpl.class ||
-            cls == UserCacheObjectByteArrayImpl.class;
+        return obj instanceof CacheObject;
     }
 
     /**
@@ -814,6 +815,20 @@ public class BinaryUtils {
      */
     public static int length(BinaryPositionReadable in, int start) {
         return in.readIntPositioned(start + GridBinaryMarshaller.TOTAL_LEN_POS);
+    }
+
+    /** */
+    public static int dataStartRelative(BinaryPositionReadable in, int start) {
+        int typeId = in.readIntPositioned(start + GridBinaryMarshaller.TYPE_ID_POS);
+
+        if (typeId == GridBinaryMarshaller.UNREGISTERED_TYPE_ID) {
+            // Gets the length of the type name which is stored as string.
+            int len = in.readIntPositioned(start + GridBinaryMarshaller.DFLT_HDR_LEN + /** object type */1);
+
+            return GridBinaryMarshaller.DFLT_HDR_LEN + /** object type */1 + /** string length */ 4 + len;
+        }
+        else
+            return GridBinaryMarshaller.DFLT_HDR_LEN;
     }
 
     /**
@@ -1909,10 +1924,11 @@ public class BinaryUtils {
                 BinaryObjectExImpl po;
 
                 if (detach) {
-                    // In detach mode we simply copy object's content.
-                    in.position(start);
+                    BinaryObjectImpl binObj = new BinaryObjectImpl(ctx, in.array(), start);
 
-                    po = new BinaryObjectImpl(ctx, in.readByteArray(len), 0);
+                    binObj.detachAllowed(true);
+
+                    po = binObj.detach(!handles.isEmpty());
                 }
                 else {
                     if (in.offheapPointer() == 0)
@@ -1920,9 +1936,9 @@ public class BinaryUtils {
                     else
                         po = new BinaryObjectOffheapImpl(ctx, in.offheapPointer(), start,
                             in.remaining() + in.position());
-
-                    in.position(start + po.length());
                 }
+
+                in.position(start + len);
 
                 handles.setHandle(po, start);
 
@@ -2527,6 +2543,80 @@ public class BinaryUtils {
     }
 
     /**
+     * @param typeId Type id.
+     * @return Binary metadata file name.
+     */
+    public static String binaryMetaFileName(int typeId) {
+        return typeId + METADATA_FILE_SUFFIX;
+    }
+
+    /** @param fileName Name of file with marshaller mapping information. */
+    public static int mappedTypeId(String fileName) {
+        try {
+            return Integer.parseInt(fileName.substring(0, fileName.indexOf(MAPPING_FILE_EXTENSION)));
+        }
+        catch (NumberFormatException e) {
+            throw new IgniteException("Reading marshaller mapping from file "
+                + fileName
+                + " failed; type ID is expected to be numeric.", e);
+        }
+    }
+
+    /** @param fileName Name of file with marshaller mapping information. */
+    public static byte mappedFilePlatformId(String fileName) {
+        try {
+            return Byte.parseByte(fileName.substring(fileName.length() - 1));
+        }
+        catch (NumberFormatException e) {
+            throw new IgniteException("Reading marshaller mapping from file "
+                + fileName
+                + " failed; last symbol of file name is expected to be numeric.", e);
+        }
+    }
+
+    /** @param file File. */
+    public static String readMapping(File file) {
+        try (FileInputStream in = new FileInputStream(file)) {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                if (file.length() == 0)
+                    return null;
+
+                return reader.readLine();
+            }
+
+        }
+        catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * @param platformId Platform id.
+     * @param typeId Type id.
+     */
+    public static String mappingFileName(byte platformId, int typeId) {
+        return typeId + MAPPING_FILE_EXTENSION + platformId;
+    }
+
+    /**
+     * @param f File.
+     * @return {@code True} if file is regular(not temporary).
+     */
+    public static boolean notTmpFile(File f) {
+        return !f.getName().endsWith(TMP_SUFFIX);
+    }
+
+    /**
+     * @param fileName File name.
+     * @return Type id
+     * @see #binaryMetaFileName(int)
+     * @see #METADATA_FILE_SUFFIX
+     */
+    public static int typeId(String fileName) {
+        return Integer.parseInt(fileName.substring(0, fileName.length() - METADATA_FILE_SUFFIX.length()));
+    }
+
+    /**
      * Get predefined write-replacer associated with class.
      *
      * @param cls Class.
@@ -2632,6 +2722,13 @@ public class BinaryUtils {
     /** */
     public static boolean isObjectArray(Class<?> cls) {
         return Object[].class == cls || BinaryArray.class == cls || BinaryEnumArray.class == cls;
+    }
+
+    /** @return Type name of the specified object. If {@link BinaryObject} was specified its type will be returned. */
+    public static String typeName(Object obj) {
+        return obj instanceof BinaryObject
+            ? ((BinaryObject)obj).type().typeName()
+            : obj == null ? null : obj.getClass().getSimpleName();
     }
 
     /**

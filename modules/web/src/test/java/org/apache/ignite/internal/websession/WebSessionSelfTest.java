@@ -59,8 +59,10 @@ import org.apache.ignite.marshaller.Marshaller;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.eclipse.jetty.security.HashLoginService;
+import org.eclipse.jetty.security.SecurityHandler;
 import org.eclipse.jetty.server.Server;
 import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.util.security.Constraint;
 import org.eclipse.jetty.webapp.WebAppContext;
 import org.jetbrains.annotations.Nullable;
 import org.junit.Ignore;
@@ -456,13 +458,13 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
                 if (!keepBinary()) {
                     IgniteCache<String, HttpSession> cache = G.ignite().cache(getCacheName());
 
-                    HttpSession session = cache.get(sesId3);
+                    HttpSession ses = cache.get(sesId3);
 
-                    assertNotNull(session);
+                    assertNotNull(ses);
 
                     assertNotNull(cache);
 
-                    HttpSession ses = cache.get(sesId3);
+                    ses = cache.get(sesId3);
 
                     assertNotNull(ses);
 
@@ -856,7 +858,6 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
         final AtomicBoolean stop = new AtomicBoolean();
 
         IgniteInternalFuture<?> restarterFut = GridTestUtils.runMultiThreadedAsync(new Callable<Object>() {
-            @SuppressWarnings("BusyWait")
             @Override public Object call() throws Exception {
                 Random rnd = new Random();
 
@@ -1013,11 +1014,14 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
 
         WebAppContext ctx = getWebContext(cfg, igniteInstanceName, keepBinary(), servlet);
 
-        HashLoginService hashLoginService = new HashLoginService();
-        hashLoginService.setName("Test Realm");
+        HashLoginService hashLoginSrvc = new HashLoginService();
+        hashLoginSrvc.setName("Test Realm");
         createRealm();
-        hashLoginService.setConfig("/tmp/realm.properties");
-        ctx.getSecurityHandler().setLoginService(hashLoginService);
+        hashLoginSrvc.setConfig("/tmp/realm.properties");
+        SecurityHandler securityHnd = ctx.getSecurityHandler();
+        // DefaultAuthenticatorFactory doesn't default to basic auth anymore.
+        securityHnd.setAuthMethod(Constraint.__BASIC_AUTH);
+        securityHnd.setLoginService(hashLoginSrvc);
 
         srv.setHandler(ctx);
 
@@ -1067,23 +1071,23 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
      * @return sesId
      */
     private String getSessionIdFromCookie(URLConnection conn) {
-        String sessionCookieValue = null;
+        String sesCookieVal = null;
         String sesId = null;
-        Map<String, List<String>> headerFields = conn.getHeaderFields();
-        Set<String> headerFieldsSet = headerFields.keySet();
-        Iterator<String> hearerFieldsIter = headerFieldsSet.iterator();
+        Map<String, List<String>> hdrFields = conn.getHeaderFields();
+        Set<String> hdrFieldsSet = hdrFields.keySet();
+        Iterator<String> hdrFieldsIter = hdrFieldsSet.iterator();
 
-        while (hearerFieldsIter.hasNext()) {
-            String headerFieldKey = hearerFieldsIter.next();
+        while (hdrFieldsIter.hasNext()) {
+            String hdrFieldKey = hdrFieldsIter.next();
 
-            if ("Set-Cookie".equalsIgnoreCase(headerFieldKey)) {
-                List<String> headerFieldValue = headerFields.get(headerFieldKey);
+            if ("Set-Cookie".equalsIgnoreCase(hdrFieldKey)) {
+                List<String> hdrFieldVal = hdrFields.get(hdrFieldKey);
 
-                for (String headerValue : headerFieldValue) {
-                    String[] fields = headerValue.split(";");
-                    sessionCookieValue = fields[0];
-                    sesId = sessionCookieValue.substring(sessionCookieValue.indexOf("=") + 1,
-                            sessionCookieValue.length());
+                for (String hdrVal : hdrFieldVal) {
+                    String[] fields = hdrVal.split(";");
+                    sesCookieVal = fields[0];
+                    sesId = sesCookieVal.substring(sesCookieVal.indexOf("=") + 1,
+                            sesCookieVal.length());
                 }
             }
         }
@@ -1275,7 +1279,8 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
 
                 res.getWriter().flush();
 
-            } else if (req.getPathInfo().equals("/simple")) {
+            }
+            else if (req.getPathInfo().equals("/simple")) {
                 HttpSession ses = req.getSession();
                 X.println(">>>", "Request session simple: " + ses.getId(), ">>>");
 
@@ -1291,7 +1296,8 @@ public class WebSessionSelfTest extends GridCommonAbstractTest {
             if (req.getPathInfo().equals("/login")) {
                 try {
                     req.login("admin", "admin");
-                } catch (Exception e) {
+                }
+                catch (Exception e) {
                     X.printerrln("Login failed due to exception.", e);
                 }
 

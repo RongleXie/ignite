@@ -25,7 +25,6 @@
 
     <xs:simpleType name="cacheMode" final="restriction">
         <xs:restriction base="xs:string">
-            <xs:enumeration value="Local" />
             <xs:enumeration value="Replicated" />
             <xs:enumeration value="Partitioned" />
         </xs:restriction>
@@ -1126,13 +1125,6 @@
                                 <xs:documentation>Whether client does not try to reconnect after server detected client node failure.</xs:documentation>
                             </xs:annotation>
                         </xs:attribute>
-                        <xs:attribute name="forceServerMode" type="xs:boolean">
-                            <xs:annotation>
-                                <xs:documentation>
-                                    Whether TcpDiscoveryspi is started in server mode regardless of IgniteConfiguration.ClientMode setting.
-                                </xs:documentation>
-                            </xs:annotation>
-                        </xs:attribute>
                         <xs:attribute name="ipFinderCleanFrequency" type="xs:string">
                             <xs:annotation>
                                 <xs:documentation>IP finder clean frequency.</xs:documentation>
@@ -1368,13 +1360,6 @@
                             <xs:annotation>
                                 <xs:documentation>
                                     Transaction timeout for partition map synchronization. TimeSpan.Zero for infinite timeout.
-                                </xs:documentation>
-                            </xs:annotation>
-                        </xs:attribute>
-                        <xs:attribute name="deadlockTimeout" type="xs:string">
-                            <xs:annotation>
-                                <xs:documentation>
-                                    Timeout before starting deadlock detection. TimeSpan.Zero for disabling deadlock detection.
                                 </xs:documentation>
                             </xs:annotation>
                         </xs:attribute>
@@ -2400,14 +2385,6 @@
                     <xs:documentation>System-wide local address or host for all Ignite components to bind to. If provided it will override all default local bind settings within Ignite.</xs:documentation>
                 </xs:annotation>
             </xs:attribute>
-            <xs:attribute name="isDaemon" type="xs:boolean">
-                <xs:annotation>
-                    <xs:documentation>
-                        Whether this node should be a daemon node. Daemon nodes are the usual grid nodes that participate in topology but not visible on the main APIs.
-                        Daemon nodes are used primarily for management and monitoring functionality.
-                    </xs:documentation>
-                </xs:annotation>
-            </xs:attribute>
             <xs:attribute name="springConfigUrl" type="xs:string">
                 <xs:annotation>
                     <xs:documentation>URL to Spring configuration file.</xs:documentation>
@@ -2515,16 +2492,6 @@
             <xs:attribute name="authenticationEnabled" type="xs:boolean">
                 <xs:annotation>
                     <xs:documentation>Whether user authentication is enabled for the cluster.</xs:documentation>
-                </xs:annotation>
-            </xs:attribute>
-            <xs:attribute name="mvccVacuumFrequency" type="xs:long">
-                <xs:annotation>
-                    <xs:documentation>Time interval between MVCC vacuum runs in milliseconds.</xs:documentation>
-                </xs:annotation>
-            </xs:attribute>
-            <xs:attribute name="mvccVacuumThreadCount" type="xs:int">
-                <xs:annotation>
-                    <xs:documentation>Number of MVCC vacuum threads.</xs:documentation>
                 </xs:annotation>
             </xs:attribute>
             <xs:attribute name="sqlQueryHistorySize" type="xs:int">

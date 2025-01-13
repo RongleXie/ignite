@@ -22,9 +22,13 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.apache.ignite.maintenance.MaintenanceTask;
 import org.jetbrains.annotations.Nullable;
+
+import static java.util.stream.Collectors.joining;
 
 /** Utility methods for the index rebuild maintenance task. */
 public class MaintenanceRebuildIndexUtils {
@@ -56,24 +60,24 @@ public class MaintenanceRebuildIndexUtils {
         if (parameters == null)
             return Collections.emptyList();
 
-        String[] parametersArray = parameters.split(INDEX_REBUILD_PARAMETER_SEPARATOR_REGEX);
+        String[] parametersArr = parameters.split(INDEX_REBUILD_PARAMETER_SEPARATOR_REGEX);
 
-        if (parametersArray.length == 0)
+        if (parametersArr.length == 0)
             return Collections.emptyList();
 
-        assert (parametersArray.length % 2) == 0;
+        assert (parametersArr.length % 2) == 0;
 
-        List<MaintenanceRebuildIndexTarget> params = new ArrayList<>(parametersArray.length / 2);
+        List<MaintenanceRebuildIndexTarget> params = new ArrayList<>(parametersArr.length / 2);
 
-        for (int i = 0; i < parametersArray.length; i += 2) {
-            String idxNameEncoded = parametersArray[i + 1];
+        for (int i = 0; i < parametersArr.length; i += 2) {
+            String idxNameEncoded = parametersArr[i + 1];
 
             String idxName = new String(
                 DECODER.decode(idxNameEncoded.getBytes(StandardCharsets.UTF_8)),
                 StandardCharsets.UTF_8
             );
 
-            params.add(new MaintenanceRebuildIndexTarget(Integer.parseInt(parametersArray[i]), idxName));
+            params.add(new MaintenanceRebuildIndexTarget(Integer.parseInt(parametersArr[i]), idxName));
         }
 
         return params;
@@ -93,6 +97,38 @@ public class MaintenanceRebuildIndexUtils {
             INDEX_REBUILD_MNTC_TASK_NAME,
             TASK_DESCRIPTION,
             cacheId + INDEX_REBUILD_PARAMETER_SEPARATOR + encodedIdxName
+        );
+    }
+
+    /**
+     * Constructs an index rebuild maintenance task based on a map cacheId -> indexes.
+     * For example:
+     * <pre>
+     * {@code
+     * Map<Integer, Set<String>> cacheToIndexes = new HashMap<>();
+     * cacheToIndexes.put(CU.cacheId("some-cache"), singleton("some-index"));
+     * MaintenanceTask task = toMaintenanceTask(cacheToIndexes);
+     * }
+     * </pre>
+     *
+     * @param cacheToIndexes cacheId -> indexes map.
+     * @return Maintenance task.
+     */
+    public static MaintenanceTask toMaintenanceTask(Map<Integer, Set<String>> cacheToIndexes) {
+        String parameters = cacheToIndexes.entrySet().stream().flatMap(entry -> {
+            Integer cacheId = entry.getKey();
+            Set<String> indexes = entry.getValue();
+            return indexes.stream().map(index -> {
+                String encodedIdxName = ENCODER.encodeToString(index.getBytes(StandardCharsets.UTF_8));
+
+                return cacheId + INDEX_REBUILD_PARAMETER_SEPARATOR + encodedIdxName;
+            });
+        }).collect(joining(INDEX_REBUILD_PARAMETER_SEPARATOR));
+
+        return new MaintenanceTask(
+            INDEX_REBUILD_MNTC_TASK_NAME,
+            TASK_DESCRIPTION,
+            parameters
         );
     }
 

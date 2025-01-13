@@ -18,6 +18,7 @@ package org.apache.ignite.internal.processors.query.calcite.sql;
 
 import java.util.List;
 import java.util.Objects;
+import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlCreate;
 import org.apache.calcite.sql.SqlIdentifier;
 import org.apache.calcite.sql.SqlKind;
@@ -26,11 +27,9 @@ import org.apache.calcite.sql.SqlNode;
 import org.apache.calcite.sql.SqlNodeList;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlSpecialOperator;
-import org.apache.calcite.sql.SqlUtil;
 import org.apache.calcite.sql.SqlWriter;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.util.ImmutableNullableList;
-import org.apache.ignite.internal.processors.query.calcite.util.IgniteResource;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
 /**
@@ -50,8 +49,21 @@ public class IgniteSqlCreateTable extends SqlCreate {
     private final @Nullable SqlNodeList createOptionList;
 
     /** */
-    private static final SqlOperator OPERATOR =
-        new SqlSpecialOperator("CREATE TABLE", SqlKind.CREATE_TABLE);
+    private static final SqlOperator OPERATOR = new SqlSpecialOperator("CREATE TABLE", SqlKind.CREATE_TABLE) {
+            /**
+             * Required to override this method to correctly copy SQL nodes on SqlShuttle.
+             */
+            @Override public SqlCall createCall(
+                @Nullable SqlLiteral functionQualifier,
+                SqlParserPos pos,
+                @Nullable SqlNode... operands
+            ) {
+                assert operands != null && operands.length == 4 : operands;
+
+                return new IgniteSqlCreateTable(pos, false, (SqlIdentifier)operands[0],
+                    (SqlNodeList)operands[1], operands[2], (SqlNodeList)operands[3]);
+            }
+        };
 
     /** Creates a SqlCreateTable. */
     public IgniteSqlCreateTable(SqlParserPos pos, boolean ifNotExists, SqlIdentifier name,
@@ -133,39 +145,5 @@ public class IgniteSqlCreateTable extends SqlCreate {
      */
     public boolean ifNotExists() {
         return ifNotExists;
-    }
-
-    /**
-     * Parse option list. Used for H2-based "create table" syntax.
-     *
-     * @return Parsed option list.
-     */
-    public static SqlNodeList parseOptionList(String opts, SqlParserPos pos) {
-        SqlNodeList list = new SqlNodeList(pos);
-
-        String[] pairs = opts.split(",");
-
-        for (String pair : pairs) {
-            String[] keyVal = pair.split("=");
-
-            if (keyVal.length != 2)
-                throw SqlUtil.newContextException(pos, IgniteResource.INSTANCE.cannotParsePair(pair));
-
-            String key = keyVal[0].trim();
-            String val = keyVal[1].trim();
-
-            IgniteSqlCreateTableOptionEnum optionKey = IgniteSqlCreateTableOptionEnum.valueOf(key.toUpperCase());
-
-            if (optionKey == null)
-                throw SqlUtil.newContextException(pos, IgniteResource.INSTANCE.illegalOption(key));
-
-            list.add(new IgniteSqlCreateTableOption(
-                SqlLiteral.createSymbol(optionKey, pos),
-                new SqlIdentifier(val, pos),
-                pos
-            ));
-        }
-
-        return list;
     }
 }

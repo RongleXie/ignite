@@ -262,23 +262,6 @@ public abstract class TcpCommunicationConfigInitializer extends IgniteSpiAdapter
     }
 
     /**
-     * @deprecated This property is ignored and will be removed in future releases.
-     */
-    @IgniteSpiConfiguration(optional = true)
-    @Deprecated
-    public TcpCommunicationSpi setSharedMemoryPort(int shmemPort) {
-        return (TcpCommunicationSpi)this;
-    }
-
-    /**
-     * @deprecated This property is ignored and will be removed in future releases.
-     */
-    @Deprecated
-    public int getSharedMemoryPort() {
-        return -1;
-    }
-
-    /**
      * Sets maximum idle connection timeout upon which a connection
      * to client will be closed.
      * <p>
@@ -529,7 +512,7 @@ public abstract class TcpCommunicationConfigInitializer extends IgniteSpiAdapter
      * @return {@code this} for chaining.
      */
     @IgniteSpiConfiguration(optional = true)
-    public TcpCommunicationSpi setSelectorsCount(int selectorsCnt) { ;
+    public TcpCommunicationSpi setSelectorsCount(int selectorsCnt) {
         cfg.selectorsCount(selectorsCnt);
 
         return (TcpCommunicationSpi)this;

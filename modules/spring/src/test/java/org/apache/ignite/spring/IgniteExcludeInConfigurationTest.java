@@ -63,10 +63,10 @@ public class IgniteExcludeInConfigurationTest extends GridCommonAbstractTest {
 
         assertEquals(1, cfg.getCacheConfiguration().length);
 
-        Collection<QueryEntity> queryEntities = cfg.getCacheConfiguration()[0].getQueryEntities();
+        Collection<QueryEntity> qryEntities = cfg.getCacheConfiguration()[0].getQueryEntities();
 
-        assertEquals(1, queryEntities.size());
-        assertNull(queryEntities.iterator().next().getKeyType());
+        assertEquals(1, qryEntities.size());
+        assertNull(qryEntities.iterator().next().getKeyType());
     }
 
     /** Spring should fail if bean class not exist in classpath. */
@@ -76,7 +76,8 @@ public class IgniteExcludeInConfigurationTest extends GridCommonAbstractTest {
 
         try {
             assertNotNull(spring.loadConfigurations(cfgLocation).get1());
-        } catch (Exception e) {
+        }
+        catch (Exception e) {
             assertTrue(X.hasCause(e, ClassNotFoundException.class));
         }
     }

@@ -41,7 +41,7 @@ import org.apache.ignite.plugin.security.SecurityException;
  * Sql query request.
  */
 @SuppressWarnings("unchecked")
-public class ClientCacheSqlFieldsQueryRequest extends ClientCacheDataRequest implements ClientTxAwareRequest {
+public class ClientCacheSqlFieldsQueryRequest extends ClientCacheQueryRequest implements ClientTxAwareRequest {
     /** Query. */
     private final SqlFieldsQuery qry;
 
@@ -111,11 +111,13 @@ public class ClientCacheSqlFieldsQueryRequest extends ClientCacheDataRequest imp
 
                 for (int i = 0; i < partCnt; i++)
                     partitions[i] = reader.readInt();
-            } else
+            }
+            else
                 partitions = null;
 
             updateBatchSize = reader.readInt();
-        } else {
+        }
+        else {
             partitions = null;
             updateBatchSize = null;
         }

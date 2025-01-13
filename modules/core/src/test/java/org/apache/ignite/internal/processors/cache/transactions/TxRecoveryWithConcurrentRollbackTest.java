@@ -394,8 +394,9 @@ public class TxRecoveryWithConcurrentRollbackTest extends GridCommonAbstractTest
                 // Doing only prepare to try to lock the key, commit is not needed here.
                 p.tx().prepareNearTxLocal();
 
-                p.tx().currentPrepareFuture().listen(fut -> txPrepareLatch.countDown());
-            } catch (Exception e) {
+                p.tx().currentPrepareFuture().listen(txPrepareLatch::countDown);
+            }
+            catch (Exception e) {
                 // No-op.
             }
         }, 1, "tx1-thread");
@@ -409,7 +410,7 @@ public class TxRecoveryWithConcurrentRollbackTest extends GridCommonAbstractTest
 
             p.tx().prepareNearTxLocal();
 
-            p.tx().currentPrepareFuture().listen(fut -> txPrepareLatch.countDown());
+            p.tx().currentPrepareFuture().listen(txPrepareLatch::countDown);
 
             txPrepareLatch.await(6, TimeUnit.SECONDS);
 

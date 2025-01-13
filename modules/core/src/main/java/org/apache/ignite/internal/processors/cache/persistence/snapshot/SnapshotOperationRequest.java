@@ -19,12 +19,15 @@ package org.apache.ignite.internal.processors.cache.persistence.snapshot;
 
 import java.io.Serializable;
 import java.util.Collection;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.apache.ignite.internal.util.distributed.DistributedProcess;
 import org.apache.ignite.internal.util.distributed.DistributedProcess.DistributedProcessType;
+import org.apache.ignite.internal.util.tostring.GridToStringExclude;
 import org.apache.ignite.internal.util.tostring.GridToStringInclude;
 import org.apache.ignite.internal.util.typedef.internal.S;
+import org.apache.ignite.internal.util.typedef.internal.U;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -40,6 +43,9 @@ public class SnapshotOperationRequest implements Serializable {
     /** Snapshot name. */
     private final String snpName;
 
+    /** Snapshot directory path. */
+    private final String snpPath;
+
     /** Baseline node IDs that must be alive to complete the operation. */
     @GridToStringInclude
     private final Set<UUID> nodes;
@@ -54,28 +60,87 @@ public class SnapshotOperationRequest implements Serializable {
     /** Exception occurred during snapshot operation processing. */
     private volatile Throwable err;
 
+    /**
+     * Snapshot operation warnings. Warnings do not interrupt snapshot process but raise exception at the end to make
+     * the operation status 'not OK' if no other error occurred.
+     */
+    private volatile List<String> warnings;
+
+    /** Snapshot metadata. */
+    @GridToStringExclude
+    private transient SnapshotMetadata meta;
+
+    /**
+     * Warning flag of concurrent inconsistent-by-nature streamer updates.
+     */
+    @GridToStringExclude
+    private transient volatile boolean streamerWrn;
+
     /** Flag indicating that the {@link DistributedProcessType#START_SNAPSHOT} phase has completed. */
     private transient volatile boolean startStageEnded;
+
+    /** Operation start time. */
+    private final long startTime;
+
+    /** If {@code true} then incremental snapshot requested. */
+    private final boolean incremental;
+
+    /** Index of incremental snapshot. */
+    private final int incIdx;
+
+    /** If {@code true} snapshot only primary copies of partitions. */
+    private final boolean onlyPrimary;
+
+    /** If {@code true} then create dump. */
+    private final boolean dump;
+
+    /** If {@code true} then compress partition files. */
+    private final boolean compress;
+
+    /** If {@code true} then content of dump encrypted. */
+    private final boolean encrypt;
 
     /**
      * @param reqId Request ID.
      * @param opNodeId Operational node ID.
      * @param snpName Snapshot name.
+     * @param snpPath Snapshot directory path.
      * @param grps List of cache group names.
      * @param nodes Baseline node IDs that must be alive to complete the operation.
+     * @param incremental {@code True} if incremental snapshot requested.
+     * @param incIdx Incremental snapshot index.
+     * @param onlyPrimary If {@code true} snapshot only primary copies of partitions.
+     * @param dump If {@code true} then create dump.
+     * @param compress If {@code true} then compress partition files.
+     * @param encrypt If {@code true} then content of dump encrypted.
      */
     public SnapshotOperationRequest(
         UUID reqId,
         UUID opNodeId,
         String snpName,
+        String snpPath,
         @Nullable Collection<String> grps,
-        Set<UUID> nodes
+        Set<UUID> nodes,
+        boolean incremental,
+        int incIdx,
+        boolean onlyPrimary,
+        boolean dump,
+        boolean compress,
+        boolean encrypt
     ) {
         this.reqId = reqId;
         this.opNodeId = opNodeId;
         this.snpName = snpName;
         this.grps = grps;
         this.nodes = nodes;
+        this.snpPath = snpPath;
+        this.incremental = incremental;
+        this.incIdx = incIdx;
+        this.onlyPrimary = onlyPrimary;
+        this.dump = dump;
+        this.compress = compress;
+        this.encrypt = encrypt;
+        startTime = U.currentTimeMillis();
     }
 
     /**
@@ -90,6 +155,13 @@ public class SnapshotOperationRequest implements Serializable {
      */
     public String snapshotName() {
         return snpName;
+    }
+
+    /**
+     * @return Snapshot directory path.
+     */
+    public String snapshotPath() {
+        return snpPath;
     }
 
     /**
@@ -127,6 +199,41 @@ public class SnapshotOperationRequest implements Serializable {
         this.err = err;
     }
 
+    /** @return {@code True} if incremental snapshot requested. */
+    public boolean incremental() {
+        return incremental;
+    }
+
+    /** @return Incremental index. */
+    public int incrementIndex() {
+        return incIdx;
+    }
+
+    /** @return If {@code true} snapshot only primary copies of partitions. */
+    public boolean onlyPrimary() {
+        return onlyPrimary;
+    }
+
+    /** @return If {@code true} then create dump. */
+    public boolean dump() {
+        return dump;
+    }
+
+    /** @return If {@code true} then compress partition files. */
+    public boolean compress() {
+        return compress;
+    }
+
+    /** @return If {@code true} then content of dump encrypted. */
+    public boolean encrypt() {
+        return encrypt;
+    }
+
+    /** @return Start time. */
+    public long startTime() {
+        return startTime;
+    }
+
     /**
      * @return Flag indicating that the {@link DistributedProcessType#START_SNAPSHOT} phase has completed.
      */
@@ -139,6 +246,50 @@ public class SnapshotOperationRequest implements Serializable {
      */
     protected void startStageEnded(boolean startStageEnded) {
         this.startStageEnded = startStageEnded;
+    }
+
+    /**
+     * @return Warnings of snapshot operation.
+     */
+    public List<String> warnings() {
+        return warnings;
+    }
+
+    /**
+     * @param warnings Warnings of snapshot operation.
+     */
+    public void warnings(List<String> warnings) {
+        assert this.warnings == null;
+
+        this.warnings = warnings;
+    }
+
+    /**
+     * {@code True} If the streamer warning flag is set. {@code False} otherwise.
+     */
+    public boolean streamerWarning() {
+        return streamerWrn;
+    }
+
+    /**
+     * Sets the streamer warning flag.
+     */
+    public boolean streamerWarning(boolean val) {
+        return streamerWrn = val;
+    }
+
+    /**
+     * @return Snapshot metadata.
+     */
+    public SnapshotMetadata meta() {
+        return meta;
+    }
+
+    /**
+     * Stores snapshot metadata.
+     */
+    public void meta(SnapshotMetadata meta) {
+        this.meta = meta;
     }
 
     /** {@inheritDoc} */

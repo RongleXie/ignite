@@ -48,6 +48,24 @@ public interface SortedSegmentedIndex extends Index {
     ) throws IgniteCheckedException;
 
     /**
+     * Finds index rows by specified range in all tree segments with cache filtering. Range can be bound or unbound.
+     *
+     * @param lower Nullable lower bound.
+     * @param upper Nullable upper bound.
+     * @param lowerIncl {@code true} for inclusive lower bound, otherwise {@code false}.
+     * @param upperIncl {@code true} for inclusive upper bound, otherwise {@code false}.
+     * @param qryCtx External index query context.
+     * @return Cursor of found index rows.
+     */
+    public GridCursor<IndexRow> find(
+        @Nullable IndexRow lower,
+        @Nullable IndexRow upper,
+        boolean lowerIncl,
+        boolean upperIncl,
+        IndexQueryContext qryCtx
+    ) throws IgniteCheckedException;
+
+    /**
      * Finds first index row for specified tree segment and cache filter.
      *
      * @param segment Number of tree segment to find.
@@ -66,6 +84,14 @@ public interface SortedSegmentedIndex extends Index {
      */
     public GridCursor<IndexRow> findLast(int segment, IndexQueryContext qryCtx)
         throws IgniteCheckedException;
+
+    /**
+     * Takes only one first or last index record.
+     *
+     * @param qryCtx External index qyery context.
+     * @param first {@code True} to take first index value. {@code False} to take last index value.
+     */
+    public GridCursor<IndexRow> findFirstOrLast(IndexQueryContext qryCtx, boolean first) throws IgniteCheckedException;
 
     /**
      * Counts index rows in specified tree segment.
@@ -97,4 +123,7 @@ public interface SortedSegmentedIndex extends Index {
      * @return amount of index tree segments.
      */
     public int segmentsCount();
+
+    /** {@inheritDoc} */
+    @Override public SortedIndexDefinition indexDefinition();
 }

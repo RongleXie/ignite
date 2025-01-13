@@ -18,6 +18,7 @@
 package org.apache.ignite.internal.processors.query.h2.twostep;
 
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -124,22 +125,33 @@ public class SortedReducer extends AbstractReducer {
     }
 
     /** {@inheritDoc} */
-    @Override public void setSources(Map<ClusterNode, Integer> nodesToSegmentsCnt) {
-        super.setSources(nodesToSegmentsCnt);
+    @Override public void setSources(Map<ClusterNode, BitSet> nodesToSegments) {
+        super.setSources(nodesToSegments);
 
-        streamsMap = U.newHashMap(nodesToSegmentsCnt.size());
+        streamsMap = U.newHashMap(nodesToSegments.size());
 
-        int totalSegmentsCnt = nodesToSegmentsCnt.values().stream().mapToInt(i -> i).sum();
+        int totalSegmentsCnt = 0;
+
+        for (BitSet bs : nodesToSegments.values())
+            totalSegmentsCnt += bs.cardinality();
 
         RowStream[] streams = new RowStream[totalSegmentsCnt];
 
         int i = 0;
 
-        for (Map.Entry<ClusterNode, Integer> e : nodesToSegmentsCnt.entrySet()) {
-            RowStream[] segments = new RowStream[e.getValue()];
+        for (Map.Entry<ClusterNode, BitSet> e : nodesToSegments.entrySet()) {
+            BitSet activeSegments = e.getValue();
 
-            for (int s = 0; s < e.getValue(); s++)
-                streams[i++] = segments[s] = new RowStream();
+            int segmentsCnt = activeSegments.length();
+
+            RowStream[] segments = new RowStream[segmentsCnt];
+
+            for (int s = 0; s < segmentsCnt; s++) {
+                if (activeSegments.get(s))
+                    streams[i++] = segments[s] = new RowStream();
+                else
+                    segments[s] = new RowStream();
+            }
 
             if (streamsMap.put(e.getKey().id(), segments) != null)
                 throw new IllegalStateException();
@@ -391,7 +403,7 @@ public class SortedReducer extends AbstractReducer {
             if (!iter.hasNext())
                 return false;
 
-            cur = H2PlainRowFactory.create(iter.next());
+            cur = H2PlainRowFactory.create(colCnt, iter.next());
 
             return true;
         }

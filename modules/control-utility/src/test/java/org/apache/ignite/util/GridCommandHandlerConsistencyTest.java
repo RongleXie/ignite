@@ -17,10 +17,15 @@
 
 package org.apache.ignite.util;
 
+import java.security.Permissions;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.apache.ignite.Ignite;
 import org.apache.ignite.binary.BinaryObjectBuilder;
 import org.apache.ignite.cache.ReadRepairStrategy;
@@ -28,7 +33,7 @@ import org.apache.ignite.cache.affinity.rendezvous.RendezvousAffinityFunction;
 import org.apache.ignite.configuration.CacheConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
-import org.apache.ignite.internal.commandline.consistency.ConsistencyCommand;
+import org.apache.ignite.internal.management.consistency.ConsistencyStatusTask;
 import org.apache.ignite.internal.processors.affinity.AffinityTopologyVersion;
 import org.apache.ignite.internal.processors.cache.CacheObjectImpl;
 import org.apache.ignite.internal.processors.cache.GridCacheAdapter;
@@ -36,21 +41,31 @@ import org.apache.ignite.internal.processors.cache.GridCacheEntryEx;
 import org.apache.ignite.internal.processors.cache.IgniteInternalCache;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersionManager;
 import org.apache.ignite.internal.processors.dr.GridDrType;
+import org.apache.ignite.internal.processors.security.impl.TestSecurityData;
+import org.apache.ignite.internal.processors.security.impl.TestSecurityPluginProvider;
 import org.apache.ignite.internal.util.typedef.G;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
-import org.apache.ignite.internal.visor.consistency.VisorConsistencyStatusTask;
 import org.apache.ignite.testframework.ListeningTestLogger;
 import org.apache.ignite.testframework.LogListener;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import static java.util.Arrays.asList;
 import static org.apache.ignite.cache.CacheAtomicityMode.ATOMIC;
 import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL;
 import static org.apache.ignite.internal.commandline.CommandHandler.EXIT_CODE_OK;
 import static org.apache.ignite.internal.commandline.CommandHandler.EXIT_CODE_UNEXPECTED_ERROR;
-import static org.apache.ignite.internal.visor.consistency.VisorConsistencyRepairTask.CONSISTENCY_VIOLATIONS_FOUND;
+import static org.apache.ignite.internal.commandline.SecurityCommandHandlerPermissionsTest.DEFAULT_PWD;
+import static org.apache.ignite.internal.commandline.SecurityCommandHandlerPermissionsTest.TEST_LOGIN;
+import static org.apache.ignite.internal.commandline.SecurityCommandHandlerPermissionsTest.TEST_NO_PERMISSIONS_LOGIN;
+import static org.apache.ignite.internal.commandline.SecurityCommandHandlerPermissionsTest.enrichWithConnectionArguments;
+import static org.apache.ignite.internal.management.consistency.ConsistencyRepairTask.CONSISTENCY_VIOLATIONS_FOUND;
+import static org.apache.ignite.plugin.security.SecurityPermission.ADMIN_OPS;
+import static org.apache.ignite.plugin.security.SecurityPermissionSetBuilder.ALL_PERMISSIONS;
+import static org.apache.ignite.plugin.security.SecurityPermissionSetBuilder.NO_PERMISSIONS;
+import static org.apache.ignite.plugin.security.SecurityPermissionSetBuilder.systemPermissions;
 import static org.apache.ignite.testframework.GridTestUtils.assertContains;
 import static org.apache.ignite.testframework.LogListener.matches;
 
@@ -68,19 +83,46 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
     /** Default cache name filtered. */
     private static final String DEFAULT_CACHE_NAME_FILTERED = DEFAULT_CACHE_NAME + "Filtered";
 
+    /** Group postfix. */
+    private static final String GRP_POSTFIX = "_grp";
+
+    /** */
+    public static final String CACHE = "--cache";
+
+    /** */
+    public static final String STRATEGY = "--strategy";
+
+    /** */
+    public static final String PARTITIONS_ARG = "--partitions";
+
     /** Partitions. */
     private static final int PARTITIONS = 32;
+
+    /** Backups. */
+    private static final int BACKUPS = 2;
 
     /** */
     protected final ListeningTestLogger listeningLog = new ListeningTestLogger(log);
 
     /** */
-    @Parameterized.Parameters(name = "strategy={0}")
+    @Parameterized.Parameters(name = "cmdHnd={0}, strategy={1}, explicitGrp={2}, callByGrp={3}, withSecurityEnabled={4}")
     public static Iterable<Object[]> data() {
         List<Object[]> res = new ArrayList<>();
 
-        for (ReadRepairStrategy strategy : ReadRepairStrategy.values())
-            res.add(new Object[] {strategy});
+        for (String invoker : commandHandlers()) {
+            for (ReadRepairStrategy strategy : ReadRepairStrategy.values()) {
+                for (boolean explicitGrp : new boolean[] {false, true}) {
+                    for (boolean callByGrp : new boolean[] {false, true}) {
+                        for (boolean withSecurityEnabled : new boolean[] {false, true}) {
+                            if (!explicitGrp && callByGrp || invoker.equals(JMX_CMD_HND) && withSecurityEnabled)
+                                continue;
+
+                            res.add(new Object[] {invoker, strategy, explicitGrp, callByGrp, withSecurityEnabled});
+                        }
+                    }
+                }
+            }
+        }
 
         return res;
     }
@@ -88,8 +130,26 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
     /**
      *
      */
-    @Parameterized.Parameter
+    @Parameterized.Parameter(1)
     public ReadRepairStrategy strategy;
+
+    /**
+     * True when cache defined via group.
+     */
+    @Parameterized.Parameter(2)
+    public boolean explicitGrp;
+
+    /**
+     * True when cache consistency repair called by group name.
+     */
+    @Parameterized.Parameter(3)
+    public boolean callByGrp;
+
+    /**
+     * True if security checks enabled.
+     */
+    @Parameterized.Parameter(4)
+    public boolean withSecurityEnabled;
 
     /**
      *
@@ -99,8 +159,11 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
             tx ? DEFAULT_CACHE_NAME_TX : DEFAULT_CACHE_NAME_ATOMIC);
 
         cfg.setAtomicityMode(tx ? TRANSACTIONAL : ATOMIC);
-        cfg.setBackups(2);
+        cfg.setBackups(BACKUPS);
         cfg.setAffinity(new RendezvousAffinityFunction().setPartitions(PARTITIONS));
+
+        if (explicitGrp)
+            cfg.setGroupName(cfg.getName() + GRP_POSTFIX);
 
         return cfg;
     }
@@ -112,6 +175,18 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
         cfg.setDataStorageConfiguration(null);
 
         cfg.setGridLogger(listeningLog);
+
+        if (withSecurityEnabled) {
+            cfg.setPluginProviders(
+                new TestSecurityPluginProvider(
+                    igniteInstanceName,
+                    DEFAULT_PWD,
+                    ALL_PERMISSIONS,
+                    false,
+                    new TestSecurityData(TEST_NO_PERMISSIONS_LOGIN, DEFAULT_PWD, NO_PERMISSIONS, new Permissions()),
+                    new TestSecurityData(TEST_LOGIN, DEFAULT_PWD, systemPermissions(ADMIN_OPS), new Permissions()))
+            );
+        }
 
         return cfg;
     }
@@ -148,9 +223,20 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
 
         injectTestSystemOut();
 
-        LogListener lsnrUnmaskedKey = matches("Key: 0 (cache: ").build(); // Unmasked key.
-        LogListener lsnrMaskedKey = matches("Key: [HIDDEN_KEY#").build(); // Masked key.
-        LogListener lsnrMaskedVal = matches("Value: [HIDDEN_VALUE#").build(); // Masked value.
+        int repairsPerEntry = repairsPerEntry();
+
+        int copies = BACKUPS + 1;
+
+        int timesMultiplicator = repairsPerEntry == 0 ?
+            copies : // N times, on each check.
+            1; // Once, on fix.
+
+        LogListener lsnrUnmaskedKey =
+            matches("Key: 0 (cache: ").times(2/*tx + atomic*/ * timesMultiplicator).build();
+        LogListener lsnrMaskedKey =
+            matches("Key: [HIDDEN_KEY#").times(brokenParts.get() * timesMultiplicator).build();
+        LogListener lsnrMaskedVal =
+            matches("Value: [HIDDEN_VALUE#").times(brokenParts.get() * copies * timesMultiplicator).build();
 
         listeningLog.registerListener(lsnrUnmaskedKey);
         listeningLog.registerListener(lsnrMaskedKey);
@@ -169,13 +255,12 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
             }
         }
 
-        assertEquals(EXIT_CODE_OK, execute("--cache", "idle_verify"));
+        checkCommandExecution(EXIT_CODE_OK, asList("--cache", "idle_verify"));
+
         assertContains(log, testOut.toString(),
             "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts.get());
 
-        Integer fixesPerEntry = fixesPerEntry();
-
-        readRepair(brokenParts, txCacheName, fixesPerEntry);
+        readRepair(brokenParts, txCacheName, repairsPerEntry);
 
         if (S.includeSensitive()) {
             for (LogListener listener : listeners) {
@@ -185,18 +270,18 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
             }
         }
 
-        if (fixesPerEntry != null && fixesPerEntry > 0)
-            assertEquals(PARTITIONS, brokenParts.get()); // Half fixed.
+        if (repairsPerEntry > 0)
+            assertEquals(PARTITIONS, brokenParts.get()); // Half repaired.
 
-        readRepair(brokenParts, atomicCacheName, fixesPerEntry != null ? 0 : null);
+        readRepair(brokenParts, atomicCacheName, repairsPerEntry);
 
         if (S.includeSensitive()) {
             for (LogListener listener : listeners)
                 assertTrue(listener.check());
         }
 
-        if (fixesPerEntry != null && fixesPerEntry > 0)
-            assertEquals(PARTITIONS, brokenParts.get()); // Atomics still broken.
+        if (repairsPerEntry > 0)
+            assertEquals(0, brokenParts.get()); // Another half repaired.
 
         assertEquals(S.includeSensitive(), lsnrUnmaskedKey.check());
         assertEquals(S.includeSensitive(), !lsnrMaskedKey.check());
@@ -220,6 +305,9 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
         cfg.setAffinity(new RendezvousAffinityFunction().setPartitions(PARTITIONS));
         cfg.setNodeFilter(node -> !node.consistentId().equals(filteredId));
 
+        if (explicitGrp)
+            cfg.setGroupName(cfg.getName() + GRP_POSTFIX);
+
         String cacheName = ignite.getOrCreateCache(cfg).getName();
 
         fillCache(cacheName, filtered, true);
@@ -232,16 +320,16 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
 
         AtomicInteger brokenParts = new AtomicInteger(PARTITIONS);
 
-        assertEquals(EXIT_CODE_OK, execute("--cache", "idle_verify"));
+        checkCommandExecution(EXIT_CODE_OK, asList("--cache", "idle_verify"));
+
         assertContains(log, testOut.toString(),
             "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts.get());
 
-        Integer fixesPerEntry = fixesPerEntry();
+        int repairsPerEntry = repairsPerEntry();
 
-        readRepair(brokenParts, cacheName, fixesPerEntry);
+        readRepair(brokenParts, cacheName, repairsPerEntry);
 
-        if (fixesPerEntry != null)
-            assertEquals(fixesPerEntry > 0 ? 0 : PARTITIONS, brokenParts.get());
+        assertEquals(repairsPerEntry > 0 ? 0 : PARTITIONS, brokenParts.get());
     }
 
     /**
@@ -254,66 +342,75 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
         injectTestSystemOut();
 
         for (int i = 0; i < PARTITIONS; i++) {
-            assertEquals(EXIT_CODE_UNEXPECTED_ERROR,
-                execute("--consistency", "repair",
-                    ConsistencyCommand.CACHE, "non-existent",
-                    ConsistencyCommand.PARTITION, String.valueOf(i),
-                    ConsistencyCommand.STRATEGY, strategy.toString()));
+            checkCommandExecution(
+                EXIT_CODE_UNEXPECTED_ERROR,
+                asList("--consistency", "repair",
+                    CACHE, "non-existent",
+                    PARTITIONS_ARG, String.valueOf(i),
+                    STRATEGY, strategy.toString())
+            );
 
-            assertTrue(VisorConsistencyStatusTask.MAP.isEmpty());
+            assertTrue(ConsistencyStatusTask.MAP.isEmpty());
 
-            assertContains(log, testOut.toString(), "Cache not found");
+            assertContains(log, testOut.toString(), "Cache (or cache group) not found");
         }
     }
 
     /**
      *
      */
-    private void readRepair(AtomicInteger brokenParts, String cacheName, Integer fixesPerEntry) {
-        for (int i = 0; i < PARTITIONS; i++) {
-            assertEquals(EXIT_CODE_OK, execute("--consistency", "repair",
-                ConsistencyCommand.CACHE, cacheName,
-                ConsistencyCommand.PARTITION, String.valueOf(i),
-                ConsistencyCommand.STRATEGY, strategy.toString()));
+    private void readRepair(AtomicInteger brokenParts, String cacheName, Integer repairsPerEntry) {
+        int i = 0;
 
-            assertTrue(VisorConsistencyStatusTask.MAP.isEmpty());
+        while (i < PARTITIONS) {
+            int from = i;
+
+            i = Math.min(i + ThreadLocalRandom.current().nextInt(1, 10), PARTITIONS);
+
+            checkCommandExecution(
+                EXIT_CODE_OK,
+                asList("--consistency", "repair",
+                    CACHE, callByGrp ? cacheName + GRP_POSTFIX : cacheName,
+                    PARTITIONS_ARG, IntStream.range(from, i).mapToObj(Integer::toString).collect(Collectors.joining(",")),
+                    STRATEGY, strategy.toString())
+            );
+
+            assertTrue(ConsistencyStatusTask.MAP.isEmpty());
 
             assertContains(log, testOut.toString(), CONSISTENCY_VIOLATIONS_FOUND);
-            assertContains(log, testOut.toString(), "[found=1, fixed=" + (fixesPerEntry != null ? fixesPerEntry.toString() : ""));
+            assertContains(log, testOut.toString(), "[found=1, repaired=" + repairsPerEntry.toString());
 
-            assertEquals(EXIT_CODE_OK, execute("--cache", "idle_verify"));
+            checkCommandExecution(EXIT_CODE_OK, asList("--cache", "idle_verify"));
 
-            if (fixesPerEntry != null)
-                if (fixesPerEntry > 0) {
-                    brokenParts.decrementAndGet();
+            if (repairsPerEntry > 0) {
+                brokenParts.addAndGet(-(i - from));
 
-                    if (brokenParts.get() > 0)
-                        assertContains(log, testOut.toString(),
-                            "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts);
-                    else
-                        assertContains(log, testOut.toString(), "no conflicts have been found");
-                }
-                else
+                if (brokenParts.get() > 0)
                     assertContains(log, testOut.toString(),
-                        "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts); // Nothing fixed.
+                        "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts);
+                else
+                    assertContains(log, testOut.toString(), "no conflicts have been found");
+            }
+            else {
+                assertContains(log, testOut.toString(),
+                    "conflict partitions has been found: [counterConflicts=0, hashConflicts=" + brokenParts); // Nothing repaired.
+            }
         }
     }
 
     /**
      *
      */
-    private Integer fixesPerEntry() {
+    private int repairsPerEntry() {
         switch (strategy) {
             case PRIMARY:
             case REMOVE:
+            case LWW: // Each filled value has an incremental version. Last versioned value will win.
                 return 1;
 
             case CHECK_ONLY:
+            case RELATIVE_MAJORITY: // Each filled value has incremental version. Each value is unique. Winner is absent.
                 return 0;
-
-            case RELATIVE_MAJORITY:
-            case LWW:
-                return null; // Who knows :)
 
             default:
                 throw new UnsupportedOperationException("Unsupported strategy");
@@ -386,5 +483,21 @@ public class GridCommandHandlerConsistencyTest extends GridCommandHandlerCluster
      */
     protected boolean binaryCache() {
         return false;
+    }
+
+    /**
+     * Wrapper for security check with {@link #assertEquals(int, int)}. The method checks 2 user logins
+     * for auth success/error.
+     * @param expExitCode Exp exit code.
+     * @param cmdArgs cmdArgs command arguments
+     */
+    private void checkCommandExecution(int expExitCode, Collection<String> cmdArgs) {
+        if (!withSecurityEnabled)
+            assertEquals(expExitCode, execute(new ArrayList<>(cmdArgs)));
+        else {
+            assertEquals(EXIT_CODE_UNEXPECTED_ERROR, execute(enrichWithConnectionArguments(cmdArgs, TEST_NO_PERMISSIONS_LOGIN)));
+
+            assertEquals(expExitCode, execute(enrichWithConnectionArguments(cmdArgs, TEST_LOGIN)));
+        }
     }
 }

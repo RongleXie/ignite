@@ -57,25 +57,15 @@ public abstract class AbstractInlineInnerIO extends BPlusInnerIO<IndexRow> imple
     }
 
     /**
-     * Register IOs for every available {@link #inlineSize} for MVCC and not.
+     * Register IOs for every available {@link #inlineSize}.
      */
     public static void register() {
-        register(false);
-        register(true);
-    }
-
-    /** */
-    private static void register(boolean mvcc) {
-        short type = mvcc ? PageIO.T_H2_EX_REF_MVCC_INNER_START : PageIO.T_H2_EX_REF_INNER_START;
-
         for (short payload = 1; payload <= PageIO.MAX_PAYLOAD_SIZE; payload++) {
-            short ioType = (short)(type + payload - 1);
+            short ioType = (short)(PageIO.T_H2_EX_REF_INNER_START + payload - 1);
 
-            AbstractInlineInnerIO io = mvcc ? new MvccInlineInnerIO(ioType, payload) : new InlineInnerIO(ioType, payload);
+            IOVersions<? extends AbstractInlineInnerIO> versions = new IOVersions<>(new InlineInnerIO(ioType, payload));
 
-            IOVersions<? extends AbstractInlineInnerIO> versions = new IOVersions<>(io);
-
-            PageIO.registerH2ExtraInner(versions, mvcc);
+            PageIO.registerH2ExtraInner(versions);
         }
     }
 
@@ -101,12 +91,13 @@ public abstract class AbstractInlineInnerIO extends BPlusInnerIO<IndexRow> imple
 
                 fieldOff += size;
 
-            } catch (Exception e) {
+            }
+            catch (Exception e) {
                 throw new IgniteException("Failed to store new index row.", e);
             }
         }
 
-        IORowHandler.store(pageAddr, off + inlineSize, row, storeMvccInfo());
+        IORowHandler.store(pageAddr, off + inlineSize, row);
     }
 
     /** {@inheritDoc} */
@@ -116,14 +107,6 @@ public abstract class AbstractInlineInnerIO extends BPlusInnerIO<IndexRow> imple
         long link = PageUtils.getLong(pageAddr, offset(idx) + inlineSize);
 
         assert link != 0;
-
-        if (storeMvccInfo()) {
-            long mvccCrdVer = mvccCoordinatorVersion(pageAddr, idx);
-            long mvccCntr = mvccCounter(pageAddr, idx);
-            int mvccOpCntr = mvccOperationCounter(pageAddr, idx);
-
-            return ((InlineIndexTree)tree).createMvccIndexRow(link, mvccCrdVer, mvccCntr, mvccOpCntr);
-        }
 
         return ((InlineIndexTree)tree).createIndexRow(link);
     }
@@ -140,7 +123,7 @@ public abstract class AbstractInlineInnerIO extends BPlusInnerIO<IndexRow> imple
 
         PageUtils.putBytes(dstPageAddr, dstOff, payload);
 
-        IORowHandler.store(dstPageAddr, dstOff + inlineSize, (InlineIO)srcIo, srcPageAddr, srcIdx, storeMvccInfo());
+        IORowHandler.store(dstPageAddr, dstOff + inlineSize, (InlineIO)srcIo, srcPageAddr, srcIdx);
     }
 
     /** {@inheritDoc} */
@@ -155,15 +138,12 @@ public abstract class AbstractInlineInnerIO extends BPlusInnerIO<IndexRow> imple
 
     /**
      * @param payload Payload size.
-     * @param mvccEnabled Whether MVCC is enabled.
      * @return IOVersions for given payload.
      */
-    public static IOVersions<? extends BPlusInnerIO<IndexRow>> versions(int payload, boolean mvccEnabled) {
+    public static IOVersions<? extends BPlusInnerIO<IndexRow>> versions(int payload) {
         assert payload >= 0 && payload <= PageIO.MAX_PAYLOAD_SIZE;
 
-        if (payload == 0)
-            return mvccEnabled ? MvccInnerIO.VERSIONS : InnerIO.VERSIONS;
-        else
-            return (IOVersions<BPlusInnerIO<IndexRow>>)PageIO.getInnerVersions((short)(payload - 1), mvccEnabled);
+        return payload == 0 ? InnerIO.VERSIONS :
+            (IOVersions<BPlusInnerIO<IndexRow>>)PageIO.getInnerVersions((short)(payload - 1));
     }
 }

@@ -38,12 +38,13 @@ from ignitetest.services.utils.background_thread import BackgroundThreadService
 from ignitetest.services.utils.concurrent import CountDownLatch, AtomicValue
 from ignitetest.services.utils.ignite_spec import resolve_spec, SHARED_PREPARED_FILE
 from ignitetest.services.utils.jmx_utils import ignite_jmx_mixin, JmxClient
+from ignitetest.services.utils.jvm_utils import JvmProcessMixin, JvmVersionMixin
 from ignitetest.services.utils.log_utils import monitor_log
 from ignitetest.services.utils.path import IgnitePathAware
 from ignitetest.utils.enum import constructible
 
 
-class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABCMeta):
+class IgniteAwareService(BackgroundThreadService, IgnitePathAware, JvmProcessMixin, JvmVersionMixin, metaclass=ABCMeta):
     """
     The base class to build services aware of Ignite.
     """
@@ -96,16 +97,17 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         self.start_async(**kwargs)
         self.await_started()
 
-    def await_started(self):
+    def await_started(self, nodes=None):
         """
         Awaits start finished.
         """
-        if self.config.service_type in (IgniteServiceType.NONE, IgniteServiceType.THIN_CLIENT):
+        if self.config.service_type in (IgniteServiceType.NONE, IgniteServiceType.THIN_CLIENT,
+                                        IgniteServiceType.THIN_JDBC):
             return
 
         self.logger.info("Waiting for IgniteAware(s) to start ...")
 
-        self.await_event("Topology snapshot", self.startup_timeout_sec, from_the_beginning=True)
+        self.await_event("Topology snapshot", self.startup_timeout_sec, nodes=nodes, from_the_beginning=True)
 
     def start_node(self, node, **kwargs):
         self.init_shared(node)
@@ -150,7 +152,7 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
                                (str(node.account), self.shutdown_timeout_sec))
 
     def stop_node(self, node, force_stop=False, **kwargs):
-        pids = self.pids(node)
+        pids = self.pids(node, self.main_java_class)
 
         for pid in pids:
             node.account.signal(pid, signal.SIGKILL if force_stop else signal.SIGTERM, allow_fail=False)
@@ -221,13 +223,6 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
 
         setattr(node, "consistent_id", node.account.externally_routable_ip)
 
-    def pids(self, node):
-        """
-        :param node: Ignite service node.
-        :return: List of service's pids.
-        """
-        return node.account.java_pids(self.main_java_class)
-
     def worker(self, idx, node, **kwargs):
         cmd = self.spec.command(node)
 
@@ -240,7 +235,7 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         :param node: Ignite service node.
         :return: True if node is alive.
         """
-        return len(self.pids(node)) > 0
+        return len(self.pids(node, self.main_java_class)) > 0
 
     def await_event_on_node(self, evt_message, node, timeout_sec, from_the_beginning=False, backoff_sec=.1,
                             log_file=None):
@@ -260,17 +255,22 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
                                err_msg="Event [%s] was not triggered on '%s' in %d seconds" % (evt_message, node.name,
                                                                                                timeout_sec))
 
-    def await_event(self, evt_message, timeout_sec, from_the_beginning=False, backoff_sec=.1, log_file=None):
+    def await_event(self, evt_message, timeout_sec, nodes=None, from_the_beginning=False, backoff_sec=.1,
+                    log_file=None):
         """
         Await for specific event messages on all nodes.
         :param evt_message: Event message.
         :param timeout_sec: Number of seconds to check the condition for before failing.
+        :param nodes: Nodes to await event or None, for all nodes.
         :param from_the_beginning: If True, search for message from the beggining of log file.
         :param backoff_sec: Number of seconds to back off between each failure to meet the condition
                 before checking again.
         :param log_file: Explicit log file.
         """
-        for node in self.nodes:
+        if nodes is None:
+            nodes = self.nodes
+
+        for node in nodes:
             self.await_event_on_node(evt_message, node, timeout_sec, from_the_beginning=from_the_beginning,
                                      backoff_sec=backoff_sec, log_file=log_file)
 
@@ -338,22 +338,24 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
 
         return time_holder.get()
 
-    @staticmethod
-    def __exec_on_node(node, task, start_waiter=None, delay_ms=0, time_holder=None):
-        if start_waiter:
-            start_waiter.count_down()
-            start_waiter.wait()
+    def __exec_on_node(self, node, task, start_waiter=None, delay_ms=0, time_holder=None):
+        try:
+            if start_waiter:
+                start_waiter.count_down()
+                start_waiter.wait()
 
-        if delay_ms > 0:
-            time.sleep(delay_ms / 1000.0)
+            if delay_ms > 0:
+                time.sleep(delay_ms / 1000.0)
 
-        if time_holder:
-            mono = time.monotonic()
-            timestamp = datetime.now()
+            if time_holder:
+                mono = time.monotonic()
+                timestamp = datetime.now()
 
-            time_holder.compare_and_set(None, (mono, timestamp))
-
-        task(node)
+                time_holder.compare_and_set(None, (mono, timestamp))
+            task(node)
+        except BaseException:
+            self.logger.error("async task threw exception:", exc_info=1)
+            raise
 
     @property
     def netfilter_store_path(self):
@@ -383,8 +385,8 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         cm_spi = self.config.communication_spi
         dsc_spi = self.config.discovery_spi
 
-        cm_ports = str(cm_spi.port) if cm_spi.port_range < 1 else str(cm_spi.port) + ':' + str(
-            cm_spi.port + cm_spi.port_range)
+        cm_ports = str(cm_spi.local_port) if cm_spi.local_port_range < 1 else str(cm_spi.local_port) + ':' + str(
+            cm_spi.local_port + cm_spi.local_port_range)
 
         dsc_ports = str(dsc_spi.port) if not hasattr(dsc_spi, 'port_range') or dsc_spi.port_range < 1 else str(
             dsc_spi.port) + ':' + str(dsc_spi.port + dsc_spi.port_range)
@@ -521,7 +523,7 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         Generate thread dump on node.
         :param node: Ignite service node.
         """
-        for pid in self.pids(node):
+        for pid in self.pids(node, self.main_java_class):
             try:
                 node.account.signal(pid, signal.SIGQUIT, allow_fail=True)
             except RemoteCommandError:
@@ -546,7 +548,7 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         snapshot_db = os.path.join(self.snapshots_dir, snapshot_name, "db")
 
         for node in self.nodes:
-            assert len(self.pids(node)) == 0
+            assert len(self.pids(node, self.main_java_class)) == 0
 
             node.account.ssh(f'rm -rf {self.database_dir}', allow_fail=False)
             node.account.ssh(f'cp -r {snapshot_db} {self.work_dir}', allow_fail=False)
@@ -555,7 +557,7 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         """
         Waiting for the rebalance to complete.
         For the method, you need to set the
-        metric_exporter='org.apache.ignite.spi.metric.jmx.JmxMetricExporterSpi'
+        metric_exporters={'org.apache.ignite.spi.metric.jmx.JmxMetricExporterSpi'}
         to the config.
 
         :param timeout_sec: Timeout to wait the rebalance to complete.
@@ -584,6 +586,14 @@ class IgniteAwareService(BackgroundThreadService, IgnitePathAware, metaclass=ABC
         :return List of alives nodes.
         """
         return [node for node in self.nodes if self.alive(node)]
+
+    @staticmethod
+    def get_file_size(node, file):
+        out = IgniteAwareService.exec_command(node, f'du -s --block-size=1 {file}')
+
+        data = out.split("\t")
+
+        return int(data[0])
 
 
 def node_failed_event_pattern(failed_node_id=None):

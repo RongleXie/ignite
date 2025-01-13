@@ -17,6 +17,8 @@
 
 package org.apache.ignite.internal.processors.cache.persistence.snapshot;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -25,14 +27,8 @@ import java.util.Map;
 import java.util.UUID;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
-import org.apache.ignite.IgniteLogger;
-import org.apache.ignite.compute.ComputeJob;
-import org.apache.ignite.compute.ComputeJobAdapter;
 import org.apache.ignite.compute.ComputeJobResult;
-import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.util.typedef.F;
-import org.apache.ignite.resources.IgniteInstanceResource;
-import org.apache.ignite.resources.LoggerResource;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -42,13 +38,9 @@ public class SnapshotHandlerRestoreTask extends AbstractSnapshotVerificationTask
     /** Serial version uid. */
     private static final long serialVersionUID = 0L;
 
-    /** Injected ignite logger. */
-    @LoggerResource
-    private IgniteLogger log;
-
     /** {@inheritDoc} */
-    @Override protected ComputeJob createJob(String snpName, String constId, Collection<String> groups) {
-        return new SnapshotHandlerRestoreJob(snpName, constId, groups);
+    @Override protected SnapshotHandlerRestoreJob createJob(String name, String consId, SnapshotPartitionsVerifyTaskArg args) {
+        return new SnapshotHandlerRestoreJob(name, args.snapshotPath(), consId, args.cacheGroupNames(), args.check());
     }
 
     /** {@inheritDoc} */
@@ -79,8 +71,9 @@ public class SnapshotHandlerRestoreTask extends AbstractSnapshotVerificationTask
 
         try {
             ignite.context().cache().context().snapshotMgr().handlers().completeAll(
-                SnapshotHandlerType.RESTORE, snapshotName, clusterResults, execNodes);
-        } catch (Exception e) {
+                SnapshotHandlerType.RESTORE, snapshotName, clusterResults, execNodes, wrns -> {});
+        }
+        catch (Exception e) {
             log.warning("The snapshot operation will be aborted due to a handler error [snapshot=" + snapshotName + "].", e);
 
             throw new IgniteException(e);
@@ -90,48 +83,38 @@ public class SnapshotHandlerRestoreTask extends AbstractSnapshotVerificationTask
     }
 
     /** Invokes all {@link SnapshotHandlerType#RESTORE} handlers locally. */
-    private static class SnapshotHandlerRestoreJob extends ComputeJobAdapter {
+    private static class SnapshotHandlerRestoreJob extends AbstractSnapshotVerificationJob {
         /** Serial version uid. */
         private static final long serialVersionUID = 0L;
 
-        /** Ignite instance. */
-        @IgniteInstanceResource
-        private IgniteEx ignite;
-
-        /** Injected logger. */
-        @LoggerResource
-        private IgniteLogger log;
-
-        /** Snapshot name. */
-        private final String snpName;
-
-        /** String representation of the consistent node ID. */
-        private final String consistentId;
-
-        /** Cache group names. */
-        private final Collection<String> grps;
-
         /**
          * @param snpName Snapshot name.
-         * @param consistentId String representation of the consistent node ID.
+         * @param snpPath Snapshot directory path.
+         * @param consId Consistent id of the related node.
          * @param grps Cache group names.
+         * @param check If {@code true} check snapshot before restore.
          */
-        public SnapshotHandlerRestoreJob(String snpName, String consistentId, Collection<String> grps) {
-            this.snpName = snpName;
-            this.consistentId = consistentId;
-            this.grps = grps;
+        public SnapshotHandlerRestoreJob(
+            String snpName,
+            @Nullable String snpPath,
+            String consId,
+            Collection<String> grps,
+            boolean check
+        ) {
+            super(snpName, snpPath, consId, grps, check);
         }
 
         /** {@inheritDoc} */
         @Override public Map<String, SnapshotHandlerResult<Object>> execute() {
             try {
                 IgniteSnapshotManager snpMgr = ignite.context().cache().context().snapshotMgr();
-                SnapshotMetadata meta = snpMgr.readSnapshotMetadata(snpName, consistentId);
-                SnapshotHandlerContext ctx = new SnapshotHandlerContext(meta, grps, ignite.localNode());
+                File snpDir = snpMgr.snapshotLocalDir(snpName, snpPath);
+                SnapshotMetadata meta = snpMgr.readSnapshotMetadata(snpDir, consId);
 
-                return snpMgr.handlers().invokeAll(SnapshotHandlerType.RESTORE, ctx);
+                return snpMgr.handlers().invokeAll(SnapshotHandlerType.RESTORE,
+                    new SnapshotHandlerContext(meta, rqGrps, ignite.localNode(), snpDir, false, check));
             }
-            catch (IgniteCheckedException e) {
+            catch (IgniteCheckedException | IOException e) {
                 throw new IgniteException(e);
             }
         }

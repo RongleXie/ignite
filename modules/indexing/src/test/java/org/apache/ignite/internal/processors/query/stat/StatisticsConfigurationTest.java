@@ -22,7 +22,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
-
 import org.apache.ignite.Ignite;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
@@ -33,7 +32,6 @@ import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInterruptedCheckedException;
 import org.apache.ignite.internal.processors.cache.persistence.IgniteCacheDatabaseSharedManager;
-import org.apache.ignite.internal.processors.query.h2.IgniteH2Indexing;
 import org.apache.ignite.internal.processors.query.stat.config.StatisticsObjectConfiguration;
 import org.apache.ignite.internal.processors.query.stat.messages.StatisticsObjectData;
 import org.apache.ignite.internal.util.typedef.F;
@@ -105,7 +103,7 @@ public class StatisticsConfigurationTest extends StatisticsAbstractTest {
                 assertNotNull("Column: " + col, colStat);
 
                 assertTrue("Column: " + col, colStat.distinct() > 0);
-                assertTrue("Column: " + col, colStat.max().getInt() > 0);
+                assertTrue("Column: " + col, colStat.max().intValue() > 0);
                 assertTrue("Column: " + col, colStat.total() == stat.rowCount());
             }
         }
@@ -397,6 +395,50 @@ public class StatisticsConfigurationTest extends StatisticsAbstractTest {
     }
 
     /**
+     * Checks orphan records cleanup on activation doesn't lead to grid hanging.
+     * - Start the grid, create table and collect statistics.
+     * - Ensure statistics for the table exists.
+     * - Disable StatisticsManagerConfiguration to prevent configuration changes in metastorage.
+     * - Drop table.
+     * - Re-activate the grid.
+     * - Ensures statistics for the table was dropped as well.
+     *
+     * @throws Exception If failed.
+     */
+    @Test
+    public void testOrphanDataCleanup() throws Exception {
+        startGrids(2);
+
+        grid(0).cluster().state(ClusterState.ACTIVE);
+
+        createSmallTable(null);
+
+        collectStatistics(StatisticsType.GLOBAL, SMALL_TARGET);
+
+        waitForStats(SCHEMA, "SMALL", TIMEOUT, checkTotalRows, checkColumStats);
+
+        // Stop StatisticsConfigurationManager with all it's listeners, so metastorage won't be updated.
+        statisticsMgr(0).statisticConfiguration().stop();
+        statisticsMgr(1).statisticConfiguration().stop();
+
+        dropSmallTable(null);
+
+        waitForStats(SCHEMA, "SMALL", TIMEOUT, (stats) -> stats.forEach(s -> assertNotNull(s)));
+
+        checkStatisticsInMetastore(grid(0).context().cache().context().database(), TIMEOUT,
+                SCHEMA, "SMALL", (s -> assertNotNull(s.data().get("A"))));
+
+        // Restarts StatisticsConfigurationManager and trigger cleanup of orphan record in metastorage.
+        grid(0).cluster().state(ClusterState.INACTIVE);
+        grid(0).cluster().state(ClusterState.ACTIVE);
+
+        waitForStats(SCHEMA, "SMALL", TIMEOUT, (stats) -> stats.forEach(s -> assertNull(s)));
+
+        checkStatisticsInMetastore(grid(0).context().cache().context().database(), TIMEOUT,
+                SCHEMA, "SMALL", (s -> assertNull(s.data().get("A"))));
+    }
+
+    /**
      * Check drop statistics when table is dropped.
      */
     @Test
@@ -416,10 +458,6 @@ public class StatisticsConfigurationTest extends StatisticsAbstractTest {
         waitForStats(SCHEMA, "SMALL_A", TIMEOUT, checkTotalRows, checkColumStats);
 
         dropSmallTable(null);
-
-        // TODO: remove after fix IGNITE-14814
-        if (persist)
-            statisticsMgr(0).dropStatistics(SMALL_TARGET);
 
         waitForStats(SCHEMA, "SMALL", TIMEOUT, (stats) -> stats.forEach(s -> assertNull(s)));
 
@@ -696,7 +734,7 @@ public class StatisticsConfigurationTest extends StatisticsAbstractTest {
     @NotNull private List<ObjectStatisticsImpl> statisticsAllNodes(String schema, String objName) {
         List<IgniteStatisticsManager> mgrs = G.allGrids().stream()
             .filter(ign -> !((IgniteEx)ign).context().clientNode())
-            .map(ign -> ((IgniteH2Indexing)((IgniteEx)ign).context().query().getIndexing()).statsManager())
+            .map(ign -> ((IgniteEx)ign).context().query().statsManager())
             .collect(Collectors.toList());
 
         return mgrs.stream()

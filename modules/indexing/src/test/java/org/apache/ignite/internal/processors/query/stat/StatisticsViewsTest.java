@@ -20,16 +20,12 @@ package org.apache.ignite.internal.processors.query.stat;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
-
+import org.apache.ignite.cache.query.SqlFieldsQuery;
 import org.apache.ignite.cluster.ClusterState;
-import org.apache.ignite.internal.processors.query.stat.config.StatisticsColumnConfiguration;
-import org.apache.ignite.internal.processors.query.stat.config.StatisticsColumnOverrides;
-import org.apache.ignite.internal.processors.query.stat.config.StatisticsObjectConfiguration;
 import org.apache.ignite.testframework.GridTestUtils;
-import org.apache.log4j.Level;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.Level;
+import org.apache.logging.log4j.core.config.Configurator;
 import org.junit.Test;
 
 /**
@@ -50,7 +46,6 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
         collectStatistics(StatisticsType.GLOBAL, SMALL_TARGET);
     }
 
-
     /**
      * Check small table configuration in statistics column configuration view.
      */
@@ -64,13 +59,13 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
         long bVer = smallStat.columnStatistics("B").version();
         long cVer = smallStat.columnStatistics("C").version();
 
-        List<List<Object>> config = Arrays.asList(
+        List<List<Object>> cfg = Arrays.asList(
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "A", (byte)15, null, null, null, null, aVer),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "B", (byte)15, null, null, null, null, bVer),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "C", (byte)15, null, null, null, null, cVer)
         );
 
-        checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where name = 'SMALL'", null, config::equals);
+        checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where name = 'SMALL'", null, cfg::equals);
     }
 
     /**
@@ -92,33 +87,26 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
         name = name.toUpperCase();
 
         // 2) Create statistics for new table.
-        // TODO: revert after IGNITE-15455
-        //grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("ANALYZE " + name)).getAll();
-        collectStatistics(StatisticsType.GLOBAL, name);
+        grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("ANALYZE " + name)).getAll();
 
         // 3) Check statistics configuration presence.
-        List<List<Object>> config = new ArrayList<>();
-        config.add(Arrays.asList(SCHEMA, "TABLE", name, "A", (byte)15, null, null, null, null, 1L));
-        config.add(Arrays.asList(SCHEMA, "TABLE", name, "B", (byte)15, null, null, null, null, 1L));
-        config.add(Arrays.asList(SCHEMA, "TABLE", name, "C", (byte)15, null, null, null, null, 1L));
+        List<List<Object>> cfg = new ArrayList<>();
+        cfg.add(Arrays.asList(SCHEMA, "TABLE", name, "A", (byte)15, null, null, null, null, 1L));
+        cfg.add(Arrays.asList(SCHEMA, "TABLE", name, "B", (byte)15, null, null, null, null, 1L));
+        cfg.add(Arrays.asList(SCHEMA, "TABLE", name, "C", (byte)15, null, null, null, null, 1L));
 
-        checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where NAME = '" + name + "'", null, config::equals);
+        checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where NAME = '" + name + "'", null, cfg::equals);
 
         // 4) Drop statistics for some column of new table.
-        //grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("DROP STATISTICS " + name + "(A);")).getAll();
-        statisticsMgr(0).statisticConfiguration().dropStatistics(
-            Collections.singletonList(new StatisticsTarget(SCHEMA, name, "A")), true);
+        grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("DROP STATISTICS " + name + "(A);")).getAll();
 
         // 5) Check statistics configuration without dropped column.
-        List<Object> removed = config.remove(0);
+        List<Object> removed = cfg.remove(0);
         checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where NAME = '" + name + "'", null,
-            act -> testContains(config, act) == null && testContains(Arrays.asList(removed), act) != null);
+            act -> testContains(cfg, act) == null && testContains(Arrays.asList(removed), act) != null);
 
         // 6) Drop statistics for new table.
-        // TODO: revert after IGNITE-15455
-        //grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("DROP STATISTICS " + name)).getAll();
-        statisticsMgr(0).statisticConfiguration().dropStatistics(
-            Collections.singletonList(new StatisticsTarget(SCHEMA, name)), true);
+        grid(0).cache(DEFAULT_CACHE_NAME).query(new SqlFieldsQuery("DROP STATISTICS " + name)).getAll();
 
         // 7) Check statistics configuration without it.
         checkSqlResult("select * from SYS.STATISTICS_CONFIGURATION where NAME = '" + name + "'", null, List::isEmpty);
@@ -153,13 +141,13 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
         Timestamp tsB = new Timestamp(smallStat.columnStatistics("B").createdAt());
         Timestamp tsC = new Timestamp(smallStat.columnStatistics("C").createdAt());
 
-        List<List<Object>> localData = Arrays.asList(
+        List<List<Object>> locData = Arrays.asList(
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "A", size, size, 0L, size, 4, 1L, tsA.toString()),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "B", size, size, 0L, size, 4, 1L, tsB.toString()),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "C", size, 10L, 0L, size, 4, 1L, tsC.toString())
         );
 
-        checkSqlResult("select * from SYS.STATISTICS_LOCAL_DATA", null, localData::equals);
+        checkSqlResult("select * from SYS.STATISTICS_LOCAL_DATA", null, locData::equals);
     }
 
     /**
@@ -171,41 +159,19 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
     public void testEnforceStatisticValues() throws Exception {
         long size = SMALL_SIZE;
 
-        Logger.getLogger(StatisticsProcessor.class).setLevel(Level.TRACE);
+        Configurator.setLevel(StatisticsProcessor.class.getName(), Level.TRACE);
         ObjectStatisticsImpl smallStat = (ObjectStatisticsImpl)statisticsMgr(0).getLocalStatistics(SMALL_KEY);
 
         assertNotNull(smallStat);
         assertEquals(size, smallStat.rowCount());
 
-        // TODO: revert after IGNITE-15455
-        // sql("DROP STATISTICS SMALL");
+        sql("DROP STATISTICS SMALL");
 
-        // sql("ANALYZE SMALL (A) WITH \"DISTINCT=5,NULLS=6,TOTAL=7,SIZE=8\"");
-        // sql("ANALYZE SMALL (B) WITH \"DISTINCT=6,NULLS=7,TOTAL=8\"");
-        // sql("ANALYZE SMALL (C)");
-        IgniteStatisticsConfigurationManager cfgMgr = statisticsMgr(0).statisticConfiguration();
+        checkSqlResult("select * from SYS.STATISTICS_LOCAL_DATA where NAME = 'SMALL'", null, List::isEmpty);
 
-        cfgMgr.dropStatistics(Collections.singletonList(SMALL_TARGET), true);
-
-        StatisticsColumnConfiguration aCfg = new StatisticsColumnConfiguration("A",
-            new StatisticsColumnOverrides(6L, 5L, 7L, 8));
-        StatisticsObjectConfiguration smallACfg = new StatisticsObjectConfiguration(SMALL_KEY,
-            Collections.singleton(aCfg), StatisticsObjectConfiguration.DEFAULT_OBSOLESCENCE_MAX_PERCENT);
-
-        cfgMgr.updateStatistics(smallACfg);
-
-        StatisticsColumnConfiguration bCfg = new StatisticsColumnConfiguration("B",
-            new StatisticsColumnOverrides(7L, 6L, 8L, null));
-        StatisticsObjectConfiguration smallBCfg = new StatisticsObjectConfiguration(SMALL_KEY,
-            Collections.singleton(bCfg), StatisticsObjectConfiguration.DEFAULT_OBSOLESCENCE_MAX_PERCENT);
-
-        cfgMgr.updateStatistics(smallBCfg);
-
-        StatisticsColumnConfiguration cCfg = new StatisticsColumnConfiguration("C", null);
-        StatisticsObjectConfiguration smallCCfg = new StatisticsObjectConfiguration(SMALL_KEY,
-            Collections.singleton(cCfg), StatisticsObjectConfiguration.DEFAULT_OBSOLESCENCE_MAX_PERCENT);
-
-        cfgMgr.updateStatistics(smallCCfg);
+        sql("ANALYZE SMALL (A) WITH \"DISTINCT=5,NULLS=6,TOTAL=7,SIZE=8\"");
+        sql("ANALYZE SMALL (B) WITH \"DISTINCT=6,NULLS=7,TOTAL=8\"");
+        sql("ANALYZE SMALL (C)");
 
         checkSqlResult("select * from SYS.STATISTICS_LOCAL_DATA where NAME = 'SMALL' and COLUMN = 'C'", null,
             list -> !list.isEmpty());
@@ -226,13 +192,13 @@ public abstract class StatisticsViewsTest extends StatisticsAbstractTest {
         long bVer = smallStat.columnStatistics("B").version();
         long cVer = smallStat.columnStatistics("C").version();
 
-        List<List<Object>> localData = Arrays.asList(
+        List<List<Object>> locData = Arrays.asList(
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "A", 8L, 5L, 6L, 7L, 8, aVer, tsA.toString()),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "B", 8L, 6L, 7L, 8L, 4, bVer, tsB.toString()),
             Arrays.asList(SCHEMA, "TABLE", "SMALL", "C", 8L, 10L, 0L, size, 4, cVer, tsC.toString())
         );
 
         checkSqlResult("select * from SYS.STATISTICS_LOCAL_DATA where NAME = 'SMALL'", null,
-            localData::equals);
+            locData::equals);
     }
 }

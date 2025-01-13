@@ -24,7 +24,6 @@ import org.apache.ignite.internal.processors.configuration.distributed.Distribut
 import org.apache.ignite.internal.processors.configuration.distributed.DistributedChangeableProperty;
 import org.apache.ignite.internal.processors.configuration.distributed.DistributedConfigurationLifecycleListener;
 import org.apache.ignite.internal.processors.configuration.distributed.DistributedPropertyDispatcher;
-import org.apache.ignite.internal.processors.metastorage.ReadableDistributedMetaStorage;
 import org.apache.ignite.internal.util.future.GridFutureAdapter;
 
 import static org.apache.ignite.IgniteSystemProperties.IGNITE_DUMP_TX_COLLISIONS_INTERVAL;
@@ -83,24 +82,34 @@ public class DistributedTransactionConfiguration {
      * owner thread.
      */
     private final DistributedChangeableProperty<Boolean> txOwnerDumpRequestsAllowed =
-        detachedBooleanProperty("txOwnerDumpRequestsAllowed");
+        detachedBooleanProperty("txOwnerDumpRequestsAllowed",
+            "Shows if dump requests from local node to near node are allowed, when " +
+                "long running transaction is found. If allowed, the compute request to near node will be made to get" +
+                " thread dump of transaction owner thread.");
 
     /** Long operations dump timeout. */
     private final DistributedChangeableProperty<Long> longOperationsDumpTimeout =
-        detachedLongProperty("longOperationsDumpTimeout");
+        detachedLongProperty("longOperationsDumpTimeout", "Cache operations that take more time than value " +
+            "of this property in milliseconds will be output to log. Set to 0 to disable.");
 
     /**
      * Threshold timeout for long transactions, if transaction exceeds it, it will be dumped in log with
      * information about how much time did it spent in system time (time while aquiring locks, preparing,
      * commiting, etc) and user time (time when client node runs some code while holding transaction and not
-     * waiting it). Equals 0 if not set. No transactions are dumped in log if this parameter is not set.
+     * waiting it). Equals 0 if not set.
      */
     private final DistributedChangeableProperty<Long> longTransactionTimeDumpThreshold =
-        detachedLongProperty("longTransactionTimeDumpThreshold");
+        detachedLongProperty("longTransactionTimeDumpThreshold",
+            "Threshold timeout for long transactions, if transaction exceeds it, it will be dumped in log with " +
+                "information about how much time did it spent in system time (time while acquiring " +
+                "locks, preparing, committing, etc) and user time (time when client node runs some code while holding " +
+                "transaction and not waiting it). Equals 0 if not set.");
 
     /** The coefficient for samples of completed transactions that will be dumped in log. */
     private final DistributedChangeableProperty<Double> transactionTimeDumpSamplesCoefficient =
-        detachedDoubleProperty("transactionTimeDumpSamplesCoefficient");
+        detachedDoubleProperty("transactionTimeDumpSamplesCoefficient",
+            "The coefficient for samples of completed transactions that will be dumped " +
+        "in log. Must be float value between 0.0 and 1.0 inclusive.");
 
     /**
      * The limit of samples of completed transactions that will be dumped in log per second, if
@@ -108,11 +117,17 @@ public class DistributedTransactionConfiguration {
      * greater than <code>0</code>.
      */
     private final DistributedChangeableProperty<Integer> longTransactionTimeDumpSamplesPerSecondLimit =
-        detachedIntegerProperty("longTransactionTimeDumpSamplesPerSecondLimit");
+        detachedIntegerProperty("longTransactionTimeDumpSamplesPerSecondLimit",
+            "The limit of samples of completed transactions that will be dumped in log per second, if " +
+                IGNITE_TRANSACTION_TIME_DUMP_SAMPLES_COEFFICIENT + " is above 0.0. Must be integer value " +
+                "greater than 0.");
 
     /** Collisions dump interval. */
     private final DistributedChangeableProperty<Integer> collisionsDumpInterval =
-        detachedIntegerProperty("collisionsDumpInterval");
+        detachedIntegerProperty("collisionsDumpInterval",
+            "When above zero, prints tx key collisions once per interval. Each transaction besides " +
+                "OPTIMISTIC SERIALIZABLE capture locks on all enlisted keys, for some reasons per key lock queue may rise. " +
+                "This property sets the interval in milliseconds during which statistics are collected.");
 
     /**
      * @param ctx Kernal context.
@@ -144,43 +159,30 @@ public class DistributedTransactionConfiguration {
                 }
 
                 @Override public void onReadyToWrite() {
-                    if (ReadableDistributedMetaStorage.isSupported(ctx)) {
-                        setDefaultValue(
-                                longOperationsDumpTimeout,
-                                dfltLongOpsDumpTimeout,
-                                log);
-                        setDefaultValue(
-                                longTransactionTimeDumpThreshold,
-                                dfltLongTransactionTimeDumpThreshold,
-                                log);
-                        setDefaultValue(
-                                transactionTimeDumpSamplesCoefficient,
-                                dfltTransactionTimeDumpSamplesCoefficient,
-                                log);
-                        setDefaultValue(
-                                longTransactionTimeDumpSamplesPerSecondLimit,
-                                dfltLongTransactionTimeDumpSamplesPerSecondLimit,
-                                log);
-                        setDefaultValue(
-                                collisionsDumpInterval,
-                                dfltCollisionsDumpInterval,
-                                log);
-                        setDefaultValue(
-                                txOwnerDumpRequestsAllowed,
-                                dfltTxOwnerDumpRequestsAllowed,
-                                log);
-                    } else {
-                        log.warning("Distributed metastorage is not supported. " +
-                            "All distributed transaction configuration parameters are unavailable. " +
-                            "Default values will be set.");
-
-                        longOperationsDumpTimeout.localUpdate(dfltLongOpsDumpTimeout);
-                        longTransactionTimeDumpThreshold.localUpdate(dfltLongTransactionTimeDumpThreshold);
-                        transactionTimeDumpSamplesCoefficient.localUpdate(dfltTransactionTimeDumpSamplesCoefficient);
-                        longTransactionTimeDumpSamplesPerSecondLimit.localUpdate(dfltLongTransactionTimeDumpSamplesPerSecondLimit);
-                        collisionsDumpInterval.localUpdate(dfltCollisionsDumpInterval);
-                        txOwnerDumpRequestsAllowed.localUpdate(dfltTxOwnerDumpRequestsAllowed);
-                    }
+                    setDefaultValue(
+                            longOperationsDumpTimeout,
+                            dfltLongOpsDumpTimeout,
+                            log);
+                    setDefaultValue(
+                            longTransactionTimeDumpThreshold,
+                            dfltLongTransactionTimeDumpThreshold,
+                            log);
+                    setDefaultValue(
+                            transactionTimeDumpSamplesCoefficient,
+                            dfltTransactionTimeDumpSamplesCoefficient,
+                            log);
+                    setDefaultValue(
+                            longTransactionTimeDumpSamplesPerSecondLimit,
+                            dfltLongTransactionTimeDumpSamplesPerSecondLimit,
+                            log);
+                    setDefaultValue(
+                            collisionsDumpInterval,
+                            dfltCollisionsDumpInterval,
+                            log);
+                    setDefaultValue(
+                            txOwnerDumpRequestsAllowed,
+                            dfltTxOwnerDumpRequestsAllowed,
+                            log);
                 }
             }
         );

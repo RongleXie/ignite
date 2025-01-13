@@ -16,17 +16,21 @@
  */
 package org.apache.ignite.internal.processors.query.calcite.exec.rel;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.PriorityQueue;
-
+import java.util.function.Supplier;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.ignite.internal.processors.query.calcite.exec.ExecutionContext;
+import org.apache.ignite.internal.util.GridBoundedPriorityQueue;
 import org.apache.ignite.internal.util.typedef.F;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Sort node.
  */
-public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>, Downstream<Row> {
+public class SortNode<Row> extends MemoryTrackingNode<Row> implements SingleNode<Row>, Downstream<Row> {
     /** How many rows are requested by downstream. */
     private int requested;
 
@@ -39,14 +43,45 @@ public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>,
     /** Rows buffer. */
     private final PriorityQueue<Row> rows;
 
+    /** SQL select limit. Negative if disabled. */
+    private final int limit;
+
+    /** Reverse-ordered rows in case of limited sort. */
+    private List<Row> reversed;
+
+    /**
+     * @param ctx Execution context.
+     * @param comp Rows comparator.
+     * @param offset Offset.
+     * @param fetch Limit.
+     */
+    public SortNode(
+        ExecutionContext<Row> ctx, RelDataType rowType,
+        Comparator<Row> comp,
+        @Nullable Supplier<Integer> offset,
+        @Nullable Supplier<Integer> fetch
+    ) {
+        super(ctx, rowType);
+
+        assert fetch == null || fetch.get() >= 0;
+        assert offset == null || offset.get() >= 0;
+
+        limit = fetch == null ? -1 : fetch.get() + (offset == null ? 0 : offset.get());
+
+        if (limit < 0)
+            rows = new PriorityQueue<>(comp);
+        else {
+            rows = new GridBoundedPriorityQueue<>(limit, comp == null ? (Comparator<Row>)Comparator.reverseOrder()
+                : comp.reversed());
+        }
+    }
+
     /**
      * @param ctx Execution context.
      * @param comp Rows comparator.
      */
     public SortNode(ExecutionContext<Row> ctx, RelDataType rowType, Comparator<Row> comp) {
-        super(ctx, rowType);
-
-        rows = comp == null ? new PriorityQueue<>() : new PriorityQueue<>(comp);
+        this(ctx, rowType, comp, null, null);
     }
 
     /** {@inheritDoc} */
@@ -54,6 +89,10 @@ public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>,
         requested = 0;
         waiting = 0;
         rows.clear();
+        if (reversed != null)
+            reversed.clear();
+
+        nodeMemoryTracker.reset();
     }
 
     /** {@inheritDoc} */
@@ -84,12 +123,21 @@ public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>,
     @Override public void push(Row row) throws Exception {
         assert downstream() != null;
         assert waiting > 0;
+        assert reversed == null || reversed.isEmpty();
 
         checkState();
 
         waiting--;
 
-        rows.add(row);
+        int size = rows.size();
+        Row top = rows.peek();
+
+        if (rows.add(row)) {
+            nodeMemoryTracker.onRowAdded(row);
+
+            if (size == rows.size()) // Row added, but size is not changed means another (top) row is evicted.
+                nodeMemoryTracker.onRowRemoved(top);
+        }
 
         if (waiting == 0)
             source().request(waiting = IN_BUFFER_SIZE);
@@ -118,12 +166,35 @@ public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>,
 
         inLoop = true;
         try {
-            while (requested > 0 && !rows.isEmpty()) {
+            // Prepare final order (reversed).
+            if (limit > 0 && !rows.isEmpty()) {
+                if (reversed == null)
+                    reversed = new ArrayList<>(rows.size());
+
+                while (!rows.isEmpty()) {
+                    reversed.add(rows.poll());
+
+                    if (++processed >= IN_BUFFER_SIZE) {
+                        // Allow the others to do their job.
+                        context().execute(this::flush, this::onError);
+
+                        return;
+                    }
+                }
+
+                processed = 0;
+            }
+
+            while (requested > 0 && (reversed == null ? !rows.isEmpty() : !reversed.isEmpty())) {
                 checkState();
 
                 requested--;
 
-                downstream().push(rows.poll());
+                Row row = reversed == null ? rows.poll() : reversed.remove(reversed.size() - 1);
+
+                nodeMemoryTracker.onRowRemoved(row);
+
+                downstream().push(row);
 
                 if (++processed >= IN_BUFFER_SIZE && requested > 0) {
                     // allow others to do their job
@@ -133,7 +204,7 @@ public class SortNode<Row> extends AbstractNode<Row> implements SingleNode<Row>,
                 }
             }
 
-            if (rows.isEmpty()) {
+            if (reversed == null ? rows.isEmpty() : reversed.isEmpty()) {
                 if (requested > 0)
                     downstream().end();
 

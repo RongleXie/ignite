@@ -130,7 +130,6 @@ import org.apache.ignite.transactions.TransactionConcurrency;
 import org.apache.ignite.transactions.TransactionIsolation;
 import org.junit.Assert;
 import org.junit.Test;
-
 import static org.apache.ignite.IgniteSystemProperties.IGNITE_DISABLE_WAL_DURING_REBALANCING;
 import static org.apache.ignite.configuration.DataStorageConfiguration.DFLT_CHECKPOINT_FREQ;
 import static org.apache.ignite.internal.IgniteNodeAttributes.ATTR_IGNITE_INSTANCE_NAME;
@@ -169,9 +168,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
     /** */
     private static final String CACHE_TO_DESTROY_NAME = "destroyCache";
-
-    /** */
-    private static final String LOC_CACHE_NAME = "local";
 
     /** */
     private static final String CACHE_1 = "cache1";
@@ -220,10 +216,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         ccfg.setNodeFilter(new RemoteNodeFilter());
         ccfg.setIndexedTypes(Integer.class, IndexedObject.class);
 
-        CacheConfiguration<Integer, IndexedObject> locCcfg = new CacheConfiguration<>(LOC_CACHE_NAME);
-        locCcfg.setCacheMode(CacheMode.LOCAL);
-        locCcfg.setIndexedTypes(Integer.class, IndexedObject.class);
-
         CacheConfiguration<Object, Object> cfg1 = new CacheConfiguration<>("cache1")
             .setAtomicityMode(CacheAtomicityMode.TRANSACTIONAL)
             .setAffinity(new RendezvousAffinityFunction(false, 32))
@@ -234,7 +226,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         CacheConfiguration<Object, Object> cfg2 = new CacheConfiguration<>(cfg1).setName("cache2").setRebalanceOrder(10);
 
-        cfg.setCacheConfiguration(ccfg, locCcfg, cfg1, cfg2);
+        cfg.setCacheConfiguration(ccfg, cfg1, cfg2);
 
         DataStorageConfiguration dbCfg = new DataStorageConfiguration();
 
@@ -307,7 +299,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testWalBig() throws Exception {
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -334,7 +326,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         cache = ignite.cache(CACHE_NAME);
 
@@ -352,7 +344,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -366,7 +358,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         cache = ignite.cache(CACHE_NAME);
 
@@ -392,7 +384,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         // CustomDiscoveryMessage will trigger service tasks
         startGrid(2);
 
-        igniteEx.cluster().active(true);
+        igniteEx.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Integer, EnumVal> cache = igniteEx.cache(CACHE_NAME);
 
@@ -426,7 +418,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testWalSimple() throws Exception {
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -467,7 +459,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         cache = ignite.cache(CACHE_NAME);
 
@@ -499,7 +491,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testWalLargeValue() throws Exception {
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -518,7 +510,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         cache = ignite.cache(CACHE_NAME);
 
@@ -551,7 +543,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ig2 = grid(2);
 
-        ig2.cluster().active(true);
+        ig2.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ig2.cache(CACHE_NAME);
 
@@ -674,7 +666,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
             final IgniteEx ignite = startGrid(1);
 
-            ignite.cluster().active(true);
+            ignite.cluster().state(ClusterState.ACTIVE);
 
             for (int i = 0; i < 50; i++) {
                 CacheConfiguration<Object, Object> ccfg = new CacheConfiguration<>("cache-" + i);
@@ -728,7 +720,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         final IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -751,7 +743,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testWalRenameDirSimple() throws Exception {
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
 
@@ -770,7 +762,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         cache = ignite.cache(RENAMED_CACHE_NAME);
 
@@ -813,7 +805,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx cacheGrid = startGrid(1);
 
-        ctrlGrid.cluster().active(true);
+        ctrlGrid.cluster().state(ClusterState.ACTIVE);
 
         ctrlGrid.compute(ctrlGrid.cluster().forRemotes()).run(new LoadRunnable(false));
 
@@ -849,11 +841,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         assertEquals(1, res.size());
         assertEquals((long)ENTRY_COUNT, res.get(0).get(0));
-
-        IgniteCache<Object, Object> locCache = cacheGrid.cache(LOC_CACHE_NAME);
-
-        for (int i = 0; i < ENTRY_COUNT; i++)
-            assertEquals(new IndexedObject(i), locCache.get(i));
     }
 
     /**
@@ -867,7 +854,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx cacheGrid = startGrid(1);
 
-        ctrlGrid.cluster().active(true);
+        ctrlGrid.cluster().state(ClusterState.ACTIVE);
 
         ctrlGrid.compute(ctrlGrid.cluster().forRemotes()).run(new LargeLoadRunnable(false));
 
@@ -896,15 +883,12 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         cacheGrid.resetLostPartitions(Collections.singleton(CACHE_NAME));
 
-        IgniteCache<Object, Object> locCache = cacheGrid.cache(LOC_CACHE_NAME);
-
         for (int i = 0; i < LARGE_ENTRY_COUNT; i++) {
             final long[] data = new long[LARGE_ARR_SIZE];
 
             Arrays.fill(data, i);
 
             Assert.assertArrayEquals(data, (long[])cache.get(i));
-            Assert.assertArrayEquals(data, (long[])locCache.get(i));
         }
     }
 
@@ -926,7 +910,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx cacheGrid = startGrid(1);
 
-        ctrlGrid.cluster().active(true);
+        ctrlGrid.cluster().state(ClusterState.ACTIVE);
 
         IgniteCompute rmt = ctrlGrid.compute(ctrlGrid.cluster().forRemotes());
 
@@ -968,7 +952,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx cacheGrid = startGrid(1);
 
-        ctrlGrid.cluster().active(true);
+        ctrlGrid.cluster().state(ClusterState.ACTIVE);
 
         IgniteCompute rmt = ctrlGrid.compute(ctrlGrid.cluster().forRemotes());
 
@@ -1014,7 +998,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testDestroyCache() throws Exception {
         IgniteEx ignite = startGrid(1);
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache = ignite.getOrCreateCache("test");
 
@@ -1035,7 +1019,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testEvictPartition() throws Exception {
         Ignite ignite1 = startGrid("node1");
 
-        ignite1.cluster().active(true);
+        ignite1.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache1 = ignite1.cache(CACHE_NAME);
 
@@ -1057,7 +1041,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         ignite1 = startGrid("node1");
         ignite2 = startGrid("node2");
 
-        ignite1.cluster().active(true);
+        ignite1.cluster().state(ClusterState.ACTIVE);
 
         cache1 = ignite1.cache(CACHE_NAME);
         cache2 = ignite2.cache(CACHE_NAME);
@@ -1078,7 +1062,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         IgniteEx ignite0 = (IgniteEx)startGrid("node1");
         IgniteEx ignite1 = (IgniteEx)startGrid("node2");
 
-        ignite1.cluster().active(true);
+        ignite1.cluster().state(ClusterState.ACTIVE);
 
         GridCacheSharedContext<Object, Object> sharedCtx0 = ignite0.context().cache().context();
         GridCacheSharedContext<Object, Object> sharedCtx1 = ignite1.context().cache().context();
@@ -1134,19 +1118,19 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     @Test
     public void testMetastorageLargeArray() throws Exception {
         int cnt = 5000;
-        int arraySize = 32_768;
+        int arrSize = 32_768;
 
         IgniteEx ignite = (IgniteEx)startGrid("node1");
 
-        ignite.cluster().active(true);
+        ignite.cluster().state(ClusterState.ACTIVE);
 
         GridCacheSharedContext<Object, Object> sharedCtx = ignite.context().cache().context();
 
         MetaStorage storage = sharedCtx.database().metaStorage();
 
         for (int i = 0; i < cnt; i++) {
-            byte[] b1 = new byte[arraySize];
-            for (int k = 0; k < arraySize; k++) {
+            byte[] b1 = new byte[arrSize];
+            for (int k = 0; k < arrSize; k++) {
                 b1[k] = (byte)(k % 100);
             }
 
@@ -1162,9 +1146,9 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         for (int i = 0; i < cnt; i++) {
             byte[] d2 = storage.readRaw(String.valueOf(i));
-            assertEquals(arraySize, d2.length);
+            assertEquals(arrSize, d2.length);
 
-            for (int k = 0; k < arraySize; k++) {
+            for (int k = 0; k < arrSize; k++) {
                 assertEquals((byte)(k % 100), d2[k]);
             }
         }
@@ -1179,7 +1163,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ignite0 = (IgniteEx)startGrid("node1");
 
-        ignite0.cluster().active(true);
+        ignite0.cluster().state(ClusterState.ACTIVE);
 
         GridCacheSharedContext<Object, Object> sharedCtx0 = ignite0.context().cache().context();
 
@@ -1228,7 +1212,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
             IgniteEx ignite0 = (IgniteEx)startGrid("node1");
 
-            ignite0.cluster().active(true);
+            ignite0.cluster().state(ClusterState.ACTIVE);
 
             GridCacheSharedContext<Object, Object> sharedCtx0 = ignite0.context().cache().context();
 
@@ -1280,7 +1264,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ignite0 = startGrid(0);
 
-        ignite0.cluster().active(true);
+        ignite0.cluster().state(ClusterState.ACTIVE);
 
         GridCacheSharedContext<Object, Object> sharedCtx0 = ignite0.context().cache().context();
 
@@ -1300,16 +1284,16 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         }
 
         for (int i = 0; i < cnt; i++) {
-            byte[] value = storage.readRaw(String.valueOf(i));
-            assert value != null;
-            assert value.length == 3;
+            byte[] val = storage.readRaw(String.valueOf(i));
+            assert val != null;
+            assert val.length == 3;
         }
 
         stopGrid(0);
 
         ignite0 = startGrid(0);
 
-        ignite0.cluster().active(true);
+        ignite0.cluster().state(ClusterState.ACTIVE);
 
         sharedCtx0 = ignite0.context().cache().context();
 
@@ -1318,8 +1302,8 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         assert storage != null;
 
         for (int i = 0; i < cnt; i++) {
-            byte[] value = storage.readRaw(String.valueOf(i));
-            assert value != null;
+            byte[] val = storage.readRaw(String.valueOf(i));
+            assert val != null;
         }
     }
 
@@ -1334,7 +1318,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         IgniteEx ignite0 = (IgniteEx)startGrid("node0");
 
-        ignite0.active(true);
+        ignite0.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache0 = ignite0.cache(CACHE_NAME);
 
@@ -1371,7 +1355,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             }
         );
 
-        IgniteInternalFuture<Object> future = GridTestUtils.runAsync(
+        IgniteInternalFuture<Object> fut = GridTestUtils.runAsync(
             () -> {
                 for (int i = 0; i < 10000; i++)
                     cache0.put(i, new IndexedObject(i));
@@ -1380,7 +1364,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             }
         );
 
-        future.get();
+        fut.get();
 
         insertFinished.countDown();
 
@@ -1394,7 +1378,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     public void testApplyDeltaRecords() throws Exception {
         IgniteEx ignite0 = (IgniteEx)startGrid("node0");
 
-        ignite0.cluster().active(true);
+        ignite0.cluster().state(ClusterState.ACTIVE);
 
         IgniteCache<Object, Object> cache0 = ignite0.cache(CACHE_NAME);
 
@@ -1598,11 +1582,11 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             for (int op = 0; op < operationsPerTransaction; op++) {
                 int key = random.nextInt(1000) + 1;
 
-                Object value = random.nextBoolean() ? randomString(random) + key : new BigObject(key);
+                Object val = random.nextBoolean() ? randomString(random) + key : new BigObject(key);
 
-                changesInTransaction.put(key, value);
+                changesInTransaction.put(key, val);
 
-                cache.put(key, value);
+                cache.put(key, val);
             }
 
             if (random.nextBoolean()) {
@@ -1625,9 +1609,9 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
         cache = ignite.cache(cacheName);
 
         for (Object key : map.keySet()) {
-            Object expectedValue = map.get(key);
-            Object actualValue = cache.get(key);
-            Assert.assertEquals("Unexpected value for key " + key, expectedValue, actualValue);
+            Object expectedVal = map.get(key);
+            Object actualVal = cache.get(key);
+            Assert.assertEquals("Unexpected value for key " + key, expectedVal, actualVal);
         }
     }
 
@@ -1677,9 +1661,9 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             for (int op = 0; op < operationsPerTransaction; op++) {
                 int key = random.nextInt(1000) + 1;
 
-                Object value = random.nextBoolean() ? randomString(random) + key : new BigObject(key);
+                Object val = random.nextBoolean() ? randomString(random) + key : new BigObject(key);
 
-                cache.put(key, value);
+                cache.put(key, val);
             }
 
             if (random.nextBoolean())
@@ -1747,7 +1731,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     @WithSystemProperty(key = "IGNITE_DISABLE_WAL_DURING_REBALANCING", value = "false")
     public void testRecoveryAfterRestart_Join() throws Exception {
         IgniteEx crd = startGrid(1);
-        crd.cluster().active(true);
+        crd.cluster().state(ClusterState.ACTIVE);
 
         for (int i = 0; i < PARTS; i++) {
             crd.cache(CACHE_1).put(i, i);
@@ -1807,7 +1791,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
     @WithSystemProperty(key = IGNITE_DISABLE_WAL_DURING_REBALANCING, value = "false")
     public void testRecoveryAfterRestart_Activate() throws Exception {
         IgniteEx crd = startGrid(1);
-        crd.cluster().active(true);
+        crd.cluster().state(ClusterState.ACTIVE);
 
         for (int i = 0; i < PARTS; i++) {
             crd.cache(CACHE_1).put(i, i);
@@ -1848,7 +1832,7 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
         GridTestUtils.runAsync(new Runnable() {
             @Override public void run() {
-                grid(1).cluster().active(true);
+                grid(1).cluster().state(ClusterState.ACTIVE);
             }
         });
 
@@ -1901,7 +1885,8 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
                                             try {
                                                 assertTrue(U.await(l2, 10, TimeUnit.SECONDS));
-                                            } catch (IgniteInterruptedCheckedException e) {
+                                            }
+                                            catch (IgniteInterruptedCheckedException e) {
                                                 fail(X.getFullStackTrace(e));
                                             }
                                         }
@@ -1940,9 +1925,9 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
                 return true;
             if (o == null || getClass() != o.getClass())
                 return false;
-            BigObject bigObject = (BigObject)o;
-            return index == bigObject.index &&
-                Arrays.equals(payload, bigObject.payload);
+            BigObject bigObj = (BigObject)o;
+            return index == bigObj.index &&
+                Arrays.equals(payload, bigObj.payload);
         }
 
         /** {@inheritDoc} */
@@ -2012,12 +1997,9 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             }
 
             IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
-            IgniteCache<Object, Object> locCache = ignite.cache(LOC_CACHE_NAME);
 
-            for (int i = 0; i < ENTRY_COUNT; i++) {
+            for (int i = 0; i < ENTRY_COUNT; i++)
                 cache.put(i, new IndexedObject(i));
-                locCache.put(i, new IndexedObject(i));
-            }
 
             ignite.log().info("Finished load.");
         }
@@ -2052,7 +2034,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
                 ignite.scheduler().callLocal(new Callable<Object>() {
                     @Override public Object call() {
                         IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
-                        IgniteCache<Object, Object> locCache = ignite.cache(LOC_CACHE_NAME);
 
                         ThreadLocalRandom rnd = ThreadLocalRandom.current();
 
@@ -2060,7 +2041,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
                         while (!Thread.currentThread().isInterrupted()) {
                             cache.put(rnd.nextInt(10_000), new IndexedObject(rnd.nextInt()));
-                            locCache.put(rnd.nextInt(10_000), new IndexedObject(rnd.nextInt()));
 
                             cnt++;
 
@@ -2108,27 +2088,13 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
 
             ignite.resetLostPartitions(Collections.singleton(CACHE_NAME));
 
-            IgniteCache<Object, Object> locCache = ignite.cache(LOC_CACHE_NAME);
-
             for (int i = 0; i < ENTRY_COUNT; i++) {
-                {
-                    Object val = cache.get(i);
+                Object val = cache.get(i);
 
-                    if (val == null) {
-                        ignite.log().warning("Failed to find a value for PARTITIONED cache key: " + i);
+                if (val == null) {
+                    ignite.log().warning("Failed to find a value for PARTITIONED cache key: " + i);
 
-                        return 2;
-                    }
-                }
-
-                {
-                    Object val = locCache.get(i);
-
-                    if (val == null) {
-                        ignite.log().warning("Failed to find a value for LOCAL cache key: " + i);
-
-                        return 2;
-                    }
+                    return 2;
                 }
             }
 
@@ -2179,7 +2145,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
             }
 
             IgniteCache<Object, Object> cache = ignite.cache(CACHE_NAME);
-            IgniteCache<Object, Object> locCache = ignite.cache(LOC_CACHE_NAME);
 
             for (int i = 0; i < LARGE_ENTRY_COUNT; i++) {
                 final long[] data = new long[LARGE_ARR_SIZE];
@@ -2187,7 +2152,6 @@ public class IgniteWalRecoveryTest extends GridCommonAbstractTest {
                 Arrays.fill(data, i);
 
                 cache.put(i, data);
-                locCache.put(i, data);
             }
 
             ignite.log().info("Finished load.");

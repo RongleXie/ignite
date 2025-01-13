@@ -20,7 +20,6 @@ package org.apache.ignite.internal.processors.query.stat;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
-
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.cluster.ClusterState;
@@ -68,13 +67,13 @@ public class StatisticsGatheringTest extends StatisticsRestartAbstractTest {
      */
     @Test
     public void testGathering() throws InterruptedException, IgniteCheckedException {
-        ObjectStatisticsImpl localStats[] = getStats("SMALL", StatisticsType.LOCAL);
+        ObjectStatisticsImpl locStats[] = getStats("SMALL", StatisticsType.LOCAL);
 
-        testCond(Objects::nonNull, localStats);
+        testCond(Objects::nonNull, locStats);
 
-        testCond(stat -> stat.columnsStatistics().size() == localStats[0].columnsStatistics().size(), localStats);
+        testCond(stat -> stat.columnsStatistics().size() == locStats[0].columnsStatistics().size(), locStats);
 
-        testCond(this::checkStat, localStats);
+        testCond(this::checkStat, locStats);
 
         ObjectStatisticsImpl globalStat = getStatsFromNode(0, "SMALL", StatisticsType.GLOBAL);
 
@@ -128,11 +127,9 @@ public class StatisticsGatheringTest extends StatisticsRestartAbstractTest {
 
     /**
      * Collect statistics for group of object at once and check it collected in each node.
-     *
-     * @throws Exception In case of errors.
      */
     @Test
-    public void testGroupGathering() throws Exception {
+    public void testGroupGathering() {
         StatisticsTarget t100 = createStatisticTarget(100);
         StatisticsTarget t101 = createStatisticTarget(101);
         StatisticsTarget tWrong = new StatisticsTarget(t101.schema(), t101.obj() + "wrong");

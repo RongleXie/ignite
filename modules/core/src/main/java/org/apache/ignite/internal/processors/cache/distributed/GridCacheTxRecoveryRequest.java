@@ -73,8 +73,8 @@ public class GridCacheTxRecoveryRequest extends GridDistributedBaseMessage {
         boolean nearTxCheck,
         IgniteUuid futId,
         IgniteUuid miniId,
-        boolean addDepInfo)
-    {
+        boolean addDepInfo
+    ) {
         super(tx.xidVersion(), 0, addDepInfo);
 
         nearXidVer = tx.nearXidVersion();
@@ -129,7 +129,7 @@ public class GridCacheTxRecoveryRequest extends GridDistributedBaseMessage {
     }
 
     /** {@inheritDoc} */
-    @Override public IgniteLogger messageLogger(GridCacheSharedContext ctx) {
+    @Override public IgniteLogger messageLogger(GridCacheSharedContext<?, ?> ctx) {
         return ctx.txRecoveryMessageLogger();
     }
 

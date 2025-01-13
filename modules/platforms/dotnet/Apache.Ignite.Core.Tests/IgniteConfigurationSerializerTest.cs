@@ -79,7 +79,6 @@ namespace Apache.Ignite.Core.Tests
 
             Assert.AreEqual("c:", cfg.WorkDirectory);
             Assert.AreEqual("127.1.1.1", cfg.Localhost);
-            Assert.IsTrue(cfg.IsDaemon);
             Assert.AreEqual(1024, cfg.JvmMaxMemoryMb);
             Assert.AreEqual(TimeSpan.FromSeconds(10), cfg.MetricsLogFrequency);
             Assert.AreEqual(TimeSpan.FromMinutes(1), ((TcpDiscoverySpi)cfg.DiscoverySpi).JoinTimeout);
@@ -101,8 +100,6 @@ namespace Apache.Ignite.Core.Tests
             Assert.IsFalse(cfg.IsActiveOnStart);
             Assert.IsTrue(cfg.AuthenticationEnabled);
 
-            Assert.AreEqual(10000, cfg.MvccVacuumFrequency);
-            Assert.AreEqual(4, cfg.MvccVacuumThreadCount);
             Assert.AreEqual(123, cfg.SqlQueryHistorySize);
             Assert.AreEqual(true, cfg.JavaPeerClassLoadingEnabled);
 
@@ -203,7 +200,7 @@ namespace Apache.Ignite.Core.Tests
 
             var atomicCfg = cfg.AtomicConfiguration;
             Assert.AreEqual(2, atomicCfg.Backups);
-            Assert.AreEqual(CacheMode.Local, atomicCfg.CacheMode);
+            Assert.AreEqual(CacheMode.Partitioned, atomicCfg.CacheMode);
             Assert.AreEqual(250, atomicCfg.AtomicSequenceReserveSize);
 
             var tx = cfg.TransactionConfiguration;
@@ -849,7 +846,6 @@ namespace Apache.Ignite.Core.Tests
                         Endpoints = new[] {"", "abc"}
                     },
                     ClientReconnectDisabled = true,
-                    ForceServerMode = true,
                     IpFinderCleanFrequency = TimeSpan.FromMinutes(7),
                     LocalAddress = "127.0.0.1",
                     LocalPort = 49900,
@@ -874,7 +870,6 @@ namespace Apache.Ignite.Core.Tests
                 NetworkTimeout = TimeSpan.FromMinutes(4),
                 SuppressWarnings = true,
                 WorkDirectory = @"c:\work",
-                IsDaemon = true,
                 UserAttributes = Enumerable.Range(1, 10).ToDictionary(x => x.ToString(),
                     x => x % 2 == 0 ? (object) x : new FooClass {Bar = x.ToString()}),
                 AtomicConfiguration = new AtomicConfiguration

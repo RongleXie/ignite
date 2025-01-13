@@ -25,6 +25,7 @@ import org.apache.ignite.internal.processors.cache.RestorePartitionStateTest;
 import org.apache.ignite.internal.processors.cache.persistence.IgniteCacheDatabaseSharedManagerSelfTest;
 import org.apache.ignite.internal.processors.cache.persistence.IgnitePdsCacheObjectBinaryProcessorOnDiscoveryTest;
 import org.apache.ignite.internal.processors.cache.persistence.IgnitePdsDiscoDataHandlingInNewClusterTest;
+import org.apache.ignite.internal.processors.cache.persistence.db.wal.WalCompactionNotificationsTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.BPlusTreePageMemoryImplTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.BPlusTreeReuseListPageMemoryImplTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.FillFactorMetricTest;
@@ -39,6 +40,7 @@ import org.apache.ignite.internal.processors.cache.persistence.pagemem.PagesWrit
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.SpeedBasedThrottleBreakdownTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.UsedPagesMetricTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.UsedPagesMetricTestPersistence;
+import org.apache.ignite.internal.processors.cache.persistence.tree.io.PageIOFreeSizeTest;
 import org.apache.ignite.internal.processors.cache.persistence.tree.io.TrackingPageIOTest;
 import org.apache.ignite.internal.processors.cache.persistence.wal.CpTriggeredWalDeltaConsistencyTest;
 import org.apache.ignite.internal.processors.cache.persistence.wal.ExplicitWalDeltaConsistencyTest;
@@ -48,6 +50,7 @@ import org.apache.ignite.internal.processors.cache.persistence.wal.SysPropWalDel
 import org.apache.ignite.internal.processors.cache.persistence.wal.WalArchiveConsistencyTest;
 import org.apache.ignite.internal.processors.cache.persistence.wal.WalEnableDisableWithNodeShutdownTest;
 import org.apache.ignite.internal.processors.cache.persistence.wal.WalEnableDisableWithRestartsTest;
+import org.apache.ignite.internal.processors.cache.persistence.wal.WalPageRecordCompactionTest;
 import org.apache.ignite.internal.processors.cache.persistence.wal.aware.SegmentAwareTest;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.DynamicSuite;
@@ -80,6 +83,7 @@ public class IgnitePdsTestSuite5 {
         GridTestUtils.addTestIfNeeded(suite, PageMemoryImplTest.class, ignoredTests);
         GridTestUtils.addTestIfNeeded(suite, PageIdDistributionTest.class, ignoredTests);
         GridTestUtils.addTestIfNeeded(suite, TrackingPageIOTest.class, ignoredTests);
+        GridTestUtils.addTestIfNeeded(suite, PageIOFreeSizeTest.class, ignoredTests);
 
         // BTree tests with store page memory.
         GridTestUtils.addTestIfNeeded(suite, BPlusTreePageMemoryImplTest.class, ignoredTests);
@@ -118,6 +122,9 @@ public class IgnitePdsTestSuite5 {
 
         GridTestUtils.addTestIfNeeded(suite, FileWriteAheadLogManagerSelfTest.class, ignoredTests);
         GridTestUtils.addTestIfNeeded(suite, IgniteCacheDatabaseSharedManagerSelfTest.class, ignoredTests);
+
+        GridTestUtils.addTestIfNeeded(suite, WalCompactionNotificationsTest.class, ignoredTests);
+        GridTestUtils.addTestIfNeeded(suite, WalPageRecordCompactionTest.class, ignoredTests);
 
         return suite;
     }

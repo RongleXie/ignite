@@ -32,6 +32,7 @@ import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.ignite.internal.processors.query.calcite.exec.exp.agg.AccumulatorWrapper;
 import org.apache.ignite.internal.processors.query.calcite.exec.exp.agg.AggregateType;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.SearchBounds;
 
 /**
  * Expression factory.
@@ -59,9 +60,11 @@ public interface ExpressionFactory<Row> {
      *
      * @param left Collations of left row.
      * @param right Collations of right row.
+     * @param nullsEqual If {@code true}, nulls are considered equal. Usually, NULL <> NULL in SQL. So, the value should
+     *                   be {@code false}. Except cases with IS DISTINCT / IS NOT DISTINCT.
      * @return Rows comparator.
      */
-    Comparator<Row> comparator(List<RelFieldCollation> left, List<RelFieldCollation> right);
+    Comparator<Row> comparator(List<RelFieldCollation> left, List<RelFieldCollation> right, boolean nullsEqual);
 
     /**
      * Creates a Filter predicate.
@@ -105,6 +108,18 @@ public interface ExpressionFactory<Row> {
      */
     Supplier<Row> rowSource(List<RexNode> values);
 
+    /**
+     * Creates iterable search bounds tuples (lower row/upper row) by search bounds expressions.
+     *
+     * @param searchBounds Search bounds.
+     * @param collation Collation.
+     * @param rowType Row type.
+     */
+    RangeIterable<Row> ranges(
+        List<SearchBounds> searchBounds,
+        RelCollation collation,
+        RelDataType rowType
+    );
 
     /**
      * Executes expression.

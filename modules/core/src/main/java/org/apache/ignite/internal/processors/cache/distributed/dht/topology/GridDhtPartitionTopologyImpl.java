@@ -350,9 +350,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
     /** {@inheritDoc} */
     @Override public boolean initPartitionsWhenAffinityReady(AffinityTopologyVersion affVer,
-        GridDhtPartitionsExchangeFuture exchFut)
-        throws IgniteInterruptedCheckedException
-    {
+        GridDhtPartitionsExchangeFuture exchFut
+    ) throws IgniteInterruptedCheckedException {
         boolean needRefresh;
 
         ctx.database().checkpointReadLock();
@@ -1721,7 +1720,8 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 }
 
                 return changed;
-            } finally {
+            }
+            finally {
                 lock.writeLock().unlock();
             }
         }
@@ -1754,11 +1754,11 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
             for (int i = 0; i < cntrMap.size(); i++) {
                 int pId = cntrMap.partitionAt(i);
 
-                long initialUpdateCntr = cntrMap.initialUpdateCounterAt(i);
+                long initUpdateCntr = cntrMap.initialUpdateCounterAt(i);
                 long updateCntr = cntrMap.updateCounterAt(i);
 
                 if (this.cntrMap.updateCounter(pId) < updateCntr) {
-                    this.cntrMap.initialUpdateCounter(pId, initialUpdateCntr);
+                    this.cntrMap.initialUpdateCounter(pId, initUpdateCntr);
                     this.cntrMap.updateCounter(pId, updateCntr);
                 }
             }
@@ -2278,7 +2278,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                 if (recentlyLost != null) {
                     U.warn(log, "Detected lost partitions" + (!safe ? " (will ignore)" : "")
                         + " [grp=" + grp.cacheOrGroupName()
-                        + ", parts=" + S.compact(recentlyLost)
+                        + ", parts=" + S.toStringSortedDistinct(recentlyLost)
                         + ", topVer=" + resTopVer + "]");
                 }
 
@@ -2367,7 +2367,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
         ctx.database().checkpointReadLock();
 
         try {
-            Map<UUID, Set<Integer>> addToWaitGroups = new HashMap<>();
+            Map<UUID, Set<Integer>> addToWaitGrps = new HashMap<>();
 
             lock.writeLock().lock();
 
@@ -2427,7 +2427,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                     UUID nodeId = entry.getKey();
                     Set<Integer> rebalancedParts = entry.getValue();
 
-                    addToWaitGroups.put(nodeId, new HashSet<>(rebalancedParts));
+                    addToWaitGrps.put(nodeId, new HashSet<>(rebalancedParts));
 
                     if (!rebalancedParts.isEmpty()) {
                         Set<Integer> historical = rebalancedParts.stream()
@@ -2442,8 +2442,17 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                             + ", readyTopVer=" + readyTopVer
                             + ", topVer=" + exchFut.initialVersion()
                             + ", nodeId=" + nodeId
-                            + ", partsFull=" + S.compact(rebalancedParts)
-                            + ", partsHistorical=" + S.compact(historical) + "]");
+                            + ", partsFull=" + S.toStringSortedDistinct(rebalancedParts)
+                            + ", partsHistorical=" + S.toStringSortedDistinct(historical) + "]");
+                    }
+                }
+
+                if (lostParts != null) {
+                    for (Integer lostPart : lostParts) {
+                        for (GridDhtPartitionMap partMap : node2part.values()) {
+                            if (partMap.containsKey(lostPart))
+                                partMap.put(lostPart, LOST);
+                        }
                     }
                 }
 
@@ -2455,7 +2464,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
 
             List<List<ClusterNode>> ideal = ctx.affinity().affinity(groupId()).idealAssignmentRaw();
 
-            for (Map.Entry<UUID, Set<Integer>> entry : addToWaitGroups.entrySet()) {
+            for (Map.Entry<UUID, Set<Integer>> entry : addToWaitGrps.entrySet()) {
                 // Add to wait groups to ensure late assignment switch after all partitions are rebalanced.
                 for (Integer part : entry.getValue()) {
                     ctx.cache().context().affinity().addToWaitGroup(
@@ -2764,16 +2773,19 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                         try {
                             if (reserved && locPart.state() == MOVING)
                                 own(locPart);
-                        } finally {
+                        }
+                        finally {
                             if (reserved)
                                 locPart.release();
                         }
                     }
                 }
-            } finally {
+            }
+            finally {
                 lock.writeLock().unlock();
             }
-        } finally {
+        }
+        finally {
             ctx.database().checkpointReadUnlock();
         }
     }
@@ -2882,9 +2894,7 @@ public class GridDhtPartitionTopologyImpl implements GridDhtPartitionTopology {
                                 long gapStart = gaps.get(j * 2);
                                 long gapStop = gaps.get(j * 2 + 1);
 
-                                if (part.group().persistenceEnabled() &&
-                                    part.group().walEnabled() &&
-                                    !part.group().mvccEnabled()) {
+                                if (part.group().persistenceEnabled() && part.group().walEnabled()) {
                                     // Rollback record tracks applied out-of-order updates while finalizeUpdateCounters
                                     // return gaps (missing updates). The code below transforms gaps to updates.
                                     RollbackRecord rec = new RollbackRecord(part.group().groupId(), part.id(),

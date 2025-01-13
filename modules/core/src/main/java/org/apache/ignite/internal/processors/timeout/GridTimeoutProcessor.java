@@ -57,7 +57,13 @@ public class GridTimeoutProcessor extends GridProcessorAdapter {
                 if (res != 0)
                     return res;
 
-                return o1.timeoutId().compareTo(o2.timeoutId());
+                res = o1.timeoutId().compareTo(o2.timeoutId());
+
+                if (res != 0)
+                    return res;
+
+                // There can be an intersection between timeouts and ids for different subsystems.
+                return o1.getClass().getName().compareTo(o2.getClass().getName());
             }
         });
 
@@ -296,7 +302,7 @@ public class GridTimeoutProcessor extends GridProcessorAdapter {
                 throw t;
             }
             finally {
-                if (err == null && !isCancelled)
+                if (err == null && !isCancelled.get())
                     err = new IllegalStateException("Thread " + name() + " is terminated unexpectedly.");
 
                 if (err instanceof OutOfMemoryError)

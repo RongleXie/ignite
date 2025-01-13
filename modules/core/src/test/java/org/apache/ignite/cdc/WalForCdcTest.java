@@ -17,12 +17,15 @@
 
 package org.apache.ignite.cdc;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.cache.CacheAtomicityMode;
@@ -33,10 +36,13 @@ import org.apache.ignite.configuration.DataRegionConfiguration;
 import org.apache.ignite.configuration.DataStorageConfiguration;
 import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.internal.IgniteEx;
+import org.apache.ignite.internal.IgniteInternalFuture;
+import org.apache.ignite.internal.pagemem.wal.IgniteWriteAheadLogManager;
 import org.apache.ignite.internal.pagemem.wal.WALIterator;
 import org.apache.ignite.internal.pagemem.wal.record.DataRecord;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecord;
 import org.apache.ignite.internal.processors.cache.persistence.file.RandomAccessFileIOFactory;
+import org.apache.ignite.internal.processors.cache.persistence.wal.FileDescriptor;
 import org.apache.ignite.internal.processors.cache.persistence.wal.WALPointer;
 import org.apache.ignite.internal.processors.cache.persistence.wal.reader.IgniteWalIteratorFactory;
 import org.apache.ignite.internal.processors.cache.persistence.wal.reader.IgniteWalIteratorFactory.IteratorParametersBuilder;
@@ -53,7 +59,11 @@ import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL;
 import static org.apache.ignite.cache.CacheMode.PARTITIONED;
 import static org.apache.ignite.cache.CacheMode.REPLICATED;
 import static org.apache.ignite.cdc.CdcSelfTest.WAL_ARCHIVE_TIMEOUT;
+import static org.apache.ignite.configuration.DataStorageConfiguration.UNLIMITED_WAL_ARCHIVE;
+import static org.apache.ignite.internal.util.IgniteUtils.KB;
+import static org.apache.ignite.internal.util.IgniteUtils.MB;
 import static org.apache.ignite.testframework.GridTestUtils.getFieldValue;
+import static org.apache.ignite.testframework.GridTestUtils.runMultiThreadedAsync;
 import static org.apache.ignite.testframework.GridTestUtils.waitForCondition;
 
 /** Check only {@link DataRecord} written to the WAL for in-memory cache. */
@@ -61,6 +71,9 @@ import static org.apache.ignite.testframework.GridTestUtils.waitForCondition;
 public class WalForCdcTest extends GridCommonAbstractTest {
     /** */
     private static final int RECORD_COUNT = 10;
+
+    /** */
+    public static final int DFLT_WAL_SGMNT_SZ = (int)(2 * MB);
 
     /** */
     @Parameterized.Parameter
@@ -75,6 +88,12 @@ public class WalForCdcTest extends GridCommonAbstractTest {
 
     /** */
     private boolean cdcEnabled;
+
+    /** */
+    private long archiveSz = UNLIMITED_WAL_ARCHIVE;
+
+    /** */
+    private int walSgmntSz = DFLT_WAL_SGMNT_SZ;
 
     /** */
     @Parameterized.Parameters(name = "mode={0}, atomicityMode={1}")
@@ -94,6 +113,8 @@ public class WalForCdcTest extends GridCommonAbstractTest {
 
         cfg.setDataStorageConfiguration(new DataStorageConfiguration()
             .setWalForceArchiveTimeout(WAL_ARCHIVE_TIMEOUT)
+            .setWalSegmentSize(walSgmntSz)
+            .setMaxWalArchiveSize(archiveSz)
             .setDefaultDataRegionConfiguration(new DataRegionConfiguration()
                 .setPersistenceEnabled(persistenceEnabled)
                 .setCdcEnabled(cdcEnabled)));
@@ -197,6 +218,107 @@ public class WalForCdcTest extends GridCommonAbstractTest {
     }
 
     /** */
+    @Test
+    public void testArchiveCleared() throws Exception {
+        persistenceEnabled = false;
+        cdcEnabled = true;
+        archiveSz = 10 * MB;
+
+        IgniteEx ignite = startGrid(0);
+
+        ignite.cluster().state(ClusterState.ACTIVE);
+
+        IgniteCache<Integer, byte[]> cache = ignite.getOrCreateCache(
+            new CacheConfiguration<Integer, byte[]>(DEFAULT_CACHE_NAME)
+                .setCacheMode(mode)
+                .setAtomicityMode(atomicityMode));
+
+        IntConsumer createData = (entryCnt) -> {
+            for (int i = 0; i < entryCnt; i++) {
+                byte[] payload = new byte[(int)KB];
+
+                ThreadLocalRandom.current().nextBytes(payload);
+
+                cache.put(i, payload);
+            }
+        };
+
+        IgniteWriteAheadLogManager wal = ignite.context().cache().context().wal(true);
+
+        long startSgmnt = wal.currentSegment();
+
+        createData.accept((int)(archiveSz / (2 * KB)));
+
+        long finishSgmnt = wal.currentSegment();
+
+        String archive = archive(ignite);
+
+        assertTrue(finishSgmnt > startSgmnt);
+        assertTrue(
+            "Wait for start segment archivation",
+            waitForCondition(() -> startSgmnt <= wal.lastArchivedSegment(), getTestTimeout())
+        );
+
+        File startSgmntArchived = new File(archive, FileDescriptor.fileName(startSgmnt));
+
+        assertTrue("Check archived segment file exists", startSgmntArchived.exists());
+
+        createData.accept((int)(archiveSz / KB));
+
+        assertTrue(
+            "Wait for archived segment cleaned",
+            waitForCondition(() -> !startSgmntArchived.exists(), getTestTimeout())
+        );
+    }
+
+    /** Tests that WAL rollover by timeout will happen if concurrent operations exists. */
+    @Test
+    public void testTimeoutRolloverWithConcurrentLoad() throws Exception {
+        persistenceEnabled = true;
+        cdcEnabled = true;
+        walSgmntSz = Integer.MAX_VALUE;
+
+        try {
+            IgniteEx ignite = startGrid(0);
+
+            ignite.cluster().state(ClusterState.ACTIVE);
+
+            IgniteCache<Long, Long> cache = ignite.getOrCreateCache(
+                new CacheConfiguration<Long, Long>(DEFAULT_CACHE_NAME)
+                    .setCacheMode(mode)
+                    .setAtomicityMode(atomicityMode));
+
+            IgniteInternalFuture<Long> genFut = runMultiThreadedAsync(() -> {
+                long cntr = 0;
+
+                while (!Thread.currentThread().isInterrupted())
+                    cache.put(cntr++, cntr);
+            }, 2, "data-generator");
+
+            try {
+                IgniteWriteAheadLogManager wal = ignite.context().cache().context().wal(true);
+
+                for (int i = 0; i < 3; i++) {
+                    log.info("Waiting for WAL rollover[iter=" + i + 1 + ']');
+
+                    long startSgmnt = wal.currentSegment();
+
+                    assertTrue(
+                        "Timeout rollover must happen",
+                        waitForCondition(() -> startSgmnt < wal.currentSegment(), WAL_ARCHIVE_TIMEOUT * 2)
+                    );
+                }
+            }
+            finally {
+                genFut.cancel();
+            }
+        }
+        finally {
+            walSgmntSz = DFLT_WAL_SGMNT_SZ;
+        }
+    }
+
+    /** */
     private void doTestWal(
         IgniteEx ignite,
         Consumer<IgniteCache<Integer, Integer>> putData,
@@ -223,21 +345,18 @@ public class WalForCdcTest extends GridCommonAbstractTest {
 
     /** */
     private int checkDataRecords(IgniteEx ignite) throws IgniteCheckedException {
-        String archive = U.resolveWorkDirectory(
-            U.defaultWorkDirectory(),
-            ignite.configuration().getDataStorageConfiguration().getWalArchivePath() + "/" +
-                U.maskForFileName(ignite.configuration().getIgniteInstanceName()),
-            false
-        ).getAbsolutePath();
-
         WALIterator iter = new IgniteWalIteratorFactory(log).iterator(new IteratorParametersBuilder()
             .ioFactory(new RandomAccessFileIOFactory())
-            .filesOrDirs(archive));
+            .filesOrDirs(archive(ignite)));
 
         int walRecCnt = 0;
 
         while (iter.hasNext()) {
             IgniteBiTuple<WALPointer, WALRecord> rec = iter.next();
+
+            // Custom records could be written in WAL even if persistence isn't enabled.
+            if (rec.get2().type().purpose() == WALRecord.RecordPurpose.CUSTOM)
+                continue;
 
             if (persistenceEnabled && (!(rec.get2() instanceof DataRecord)))
                 continue;
@@ -253,5 +372,19 @@ public class WalForCdcTest extends GridCommonAbstractTest {
         }
 
         return walRecCnt;
+    }
+
+    /**
+     * @param ignite Ignite.
+     * @return WAL archive patch
+     * @throws IgniteCheckedException If failed
+     */
+    private static String archive(IgniteEx ignite) throws IgniteCheckedException {
+        return U.resolveWorkDirectory(
+            U.defaultWorkDirectory(),
+            ignite.configuration().getDataStorageConfiguration().getWalArchivePath() + "/" +
+                U.maskForFileName(ignite.configuration().getIgniteInstanceName()),
+            false
+        ).getAbsolutePath();
     }
 }

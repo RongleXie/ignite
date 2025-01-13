@@ -646,6 +646,9 @@ public abstract class IgniteAbstractDynamicCacheStartFailTest extends GridCacheA
         AffinityTopologyVersion currVer = grid(0).context().discovery().topologyVersionEx();
         AffinityTopologyVersion expVer = currVer.nextMinorVersion();
 
+        // Make sure that client has processed a create cache request before destroying it.
+        awaitCacheOnClient(client, DYNAMIC_CACHE_NAME);
+
         // Let's try to destroy the cache that is being started.
         IgniteInternalFuture<?> stopFut = GridTestUtils.runAsync(() -> client.destroyCache(DYNAMIC_CACHE_NAME));
 
@@ -834,8 +837,11 @@ public abstract class IgniteAbstractDynamicCacheStartFailTest extends GridCacheA
 
             cfg.setName(cacheName);
 
-            if (i == unluckyCfg)
+            if (i == unluckyCfg) {
+                cfg.setNodeFilter(new AnyNodeMXFilter());
+
                 mbSrv.cache(cacheName);
+            }
 
             cfgs.add(cfg);
         }
@@ -888,6 +894,25 @@ public abstract class IgniteAbstractDynamicCacheStartFailTest extends GridCacheA
         /** */
         public int getValue() {
             return fieldVal;
+        }
+    }
+
+    /**
+     * 'MXBean'-named interface to register mx bean at dynamic cache creation to simulate failure.
+     *
+     * @see GridCacheProcessor#registerMbean(Object, String, boolean)
+     */
+    public interface UUIDMXBean {
+        // No-op.
+    }
+
+    /**
+     * Empty filter used to register mxbean at dynamic cache creation to simalate failure.
+     */
+    public static class AnyNodeMXFilter implements IgnitePredicate<ClusterNode>, UUIDMXBean {
+        /** {@inheritDoc} */
+        @Override public boolean apply(ClusterNode clusterNode) {
+            return true;
         }
     }
 

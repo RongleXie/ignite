@@ -16,7 +16,6 @@
  */
 package org.apache.ignite.internal.processors.query.calcite.exec;
 
-import org.apache.ignite.internal.cache.query.index.sorted.inline.IndexQueryContext;
 import org.apache.ignite.internal.util.lang.GridCursor;
 
 /**
@@ -30,8 +29,9 @@ public interface TreeIndex<R> {
      *
      * @param lower Lower bound.
      * @param upper Upper bound.
-     * @param qctx Index query context.
+     * @param lowerInclude Inclusive lower bound.
+     * @param upperInclude Inclusive upper bound.
      * @return Cursor over the rows within bounds.
      */
-    public GridCursor<R> find(R lower, R upper, IndexQueryContext qctx);
+    public GridCursor<R> find(R lower, R upper, boolean lowerInclude, boolean upperInclude);
 }

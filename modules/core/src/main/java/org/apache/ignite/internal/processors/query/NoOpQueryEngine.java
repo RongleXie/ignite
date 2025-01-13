@@ -17,10 +17,8 @@
 
 package org.apache.ignite.internal.processors.query;
 
-import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 import org.apache.ignite.cache.query.FieldsQueryCursor;
 import org.apache.ignite.internal.GridKernalContext;
 import org.apache.ignite.internal.processors.GridProcessorAdapter;
@@ -46,22 +44,30 @@ public class NoOpQueryEngine extends GridProcessorAdapter implements QueryEngine
     }
 
     /** {@inheritDoc} */
-    @Override public List<FieldsQueryCursor<List<?>>> queryBatched(
+    @Override public List<List<GridQueryFieldMetadata>> parameterMetaData(
         @Nullable QueryContext ctx,
         String schemaName,
-        String query,
-        List<Object[]> batchedParams
+        String qry
     ) throws IgniteSQLException {
         return Collections.emptyList();
     }
 
     /** {@inheritDoc} */
-    @Override public Collection<? extends RunningQuery> runningQueries() {
+    @Override public List<List<GridQueryFieldMetadata>> resultSetMetaData(
+        @Nullable QueryContext ctx,
+        String schemaName,
+        String qry
+    ) throws IgniteSQLException {
         return Collections.emptyList();
     }
 
     /** {@inheritDoc} */
-    @Override public RunningQuery runningQuery(UUID id) {
-        return null;
+    @Override public List<FieldsQueryCursor<List<?>>> queryBatched(
+        @Nullable QueryContext ctx,
+        String schemaName,
+        String qry,
+        List<Object[]> batchedParams
+    ) throws IgniteSQLException {
+        return Collections.emptyList();
     }
 }

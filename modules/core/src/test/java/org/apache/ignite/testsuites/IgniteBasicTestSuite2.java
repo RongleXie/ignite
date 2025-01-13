@@ -35,9 +35,12 @@ import org.apache.ignite.internal.IgniteThreadGroupNodeRestartTest;
 import org.apache.ignite.internal.MarshallerContextLockingSelfTest;
 import org.apache.ignite.internal.managers.IgniteDiagnosticMessagesMultipleConnectionsTest;
 import org.apache.ignite.internal.managers.IgniteDiagnosticMessagesTest;
+import org.apache.ignite.internal.managers.IgniteDiagnosticPartitionReleaseFutureLimitTest;
 import org.apache.ignite.internal.managers.communication.GridIoManagerFileTransmissionSelfTest;
 import org.apache.ignite.internal.managers.discovery.IncompleteDeserializationExceptionTest;
+import org.apache.ignite.internal.metric.MetricConfigurationTest;
 import org.apache.ignite.internal.metric.MetricsClusterActivationTest;
+import org.apache.ignite.internal.metric.PeriodicHistogramMetricImplTest;
 import org.apache.ignite.internal.mxbean.IgniteStandardMXBeanTest;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecordSerializationTest;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecordTest;
@@ -47,6 +50,7 @@ import org.apache.ignite.internal.processors.cache.CacheLockCandidatesThreadTest
 import org.apache.ignite.internal.processors.cache.GridLongRunningInitNewCrdFutureDiagnosticsTest;
 import org.apache.ignite.internal.processors.cache.IgniteMarshallerCacheClassNameConflictTest;
 import org.apache.ignite.internal.processors.cache.IgniteMarshallerCacheClientRequestsMappingOnMissTest;
+import org.apache.ignite.internal.processors.cache.IgniteMarshallerCacheClientRequestsMappingTest;
 import org.apache.ignite.internal.processors.cache.IgniteMarshallerCacheFSRestoreTest;
 import org.apache.ignite.internal.processors.cache.IgniteMarshallerCacheSeparateDirectoryTest;
 import org.apache.ignite.internal.processors.cache.RebalanceWithDifferentThreadPoolSizeTest;
@@ -58,6 +62,7 @@ import org.apache.ignite.internal.processors.cache.persistence.pagemem.PagePoolT
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.ProgressSpeedCalculationTest;
 import org.apache.ignite.internal.processors.cache.persistence.pagemem.SegmentedLruPageListTest;
 import org.apache.ignite.internal.processors.cache.transactions.AtomicOperationsInTxTest;
+import org.apache.ignite.internal.processors.cache.transactions.NonTransactionalOperationsInTxTest;
 import org.apache.ignite.internal.processors.cache.transactions.TransactionIntegrityWithSystemWorkerDeathTest;
 import org.apache.ignite.internal.processors.cluster.BaselineAutoAdjustMXBeanTest;
 import org.apache.ignite.internal.processors.configuration.distributed.DistributedConfigurationInMemoryTest;
@@ -76,8 +81,6 @@ import org.apache.ignite.internal.processors.metastorage.DistributedMetaStorageT
 import org.apache.ignite.internal.processors.metastorage.persistence.DistributedMetaStorageHistoryCacheTest;
 import org.apache.ignite.internal.processors.metastorage.persistence.DmsDataWriterWorkerTest;
 import org.apache.ignite.internal.processors.metastorage.persistence.InMemoryCachedDistributedMetaStorageBridgeTest;
-import org.apache.ignite.internal.suggestions.JvmConfigurationSuggestionsTest;
-import org.apache.ignite.internal.util.GridCleanerTest;
 import org.apache.ignite.internal.util.collection.BitSetIntSetTest;
 import org.apache.ignite.internal.util.collection.ImmutableIntSetTest;
 import org.apache.ignite.internal.util.collection.IntHashMapTest;
@@ -89,6 +92,7 @@ import org.apache.ignite.plugin.PluginNodeValidationTest;
 import org.apache.ignite.plugin.security.SecurityPermissionSetBuilderTest;
 import org.apache.ignite.spi.checkpoint.noop.NoopCheckpointSpiLoggingTest;
 import org.apache.ignite.startup.properties.NotStringSystemPropertyTest;
+import org.apache.ignite.testframework.MemorizingAppenderTest;
 import org.apache.ignite.testframework.MessageOrderLogListenerTest;
 import org.apache.ignite.testframework.test.ConfigVariationsExecutionTest;
 import org.apache.ignite.testframework.test.ConfigVariationsTestSuiteBuilderTest;
@@ -131,6 +135,7 @@ import org.junit.runners.Suite;
     CacheFreeListSelfTest.class,
     DataRegionMetricsSelfTest.class,
     MetricsClusterActivationTest.class,
+    MetricConfigurationTest.class,
     SwapPathConstructionSelfTest.class,
     BitSetIntSetTest.class,
     ImmutableIntSetTest.class,
@@ -140,14 +145,14 @@ import org.junit.runners.Suite;
     IgniteMarshallerCacheFSRestoreTest.class,
     IgniteMarshallerCacheClassNameConflictTest.class,
     IgniteMarshallerCacheClientRequestsMappingOnMissTest.class,
+    IgniteMarshallerCacheClientRequestsMappingTest.class,
     IgniteMarshallerCacheSeparateDirectoryTest.class,
 
     IgniteDiagnosticMessagesTest.class,
     IgniteDiagnosticMessagesMultipleConnectionsTest.class,
+    IgniteDiagnosticPartitionReleaseFutureLimitTest.class,
 
     IgniteRejectConnectOnNodeStopTest.class,
-
-    GridCleanerTest.class,
 
     ClassSetTest.class,
 
@@ -162,6 +167,7 @@ import org.junit.runners.Suite;
     ExchangeWorkerWaitingForTaskTest.class,
 
     AtomicOperationsInTxTest.class,
+    NonTransactionalOperationsInTxTest.class,
 
     RebalanceWithDifferentThreadPoolSizeTest.class,
 
@@ -169,6 +175,8 @@ import org.junit.runners.Suite;
     GridLongRunningInitNewCrdFutureDiagnosticsTest.class,
 
     MessageOrderLogListenerTest.class,
+
+    MemorizingAppenderTest.class,
 
     CacheLocalGetSerializationTest.class,
 
@@ -215,11 +223,11 @@ import org.junit.runners.Suite;
     RemoveAllDeadlockTest.class,
 
     NoopCheckpointSpiLoggingTest.class,
-    JvmConfigurationSuggestionsTest.class,
     ExponentialBackoffTest.class,
     ProgressSpeedCalculationTest.class,
 
-    ConcurrentMappingFileReadWriteTest.class
+    ConcurrentMappingFileReadWriteTest.class,
+    PeriodicHistogramMetricImplTest.class,
 })
 public class IgniteBasicTestSuite2 {
 }

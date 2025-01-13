@@ -17,10 +17,7 @@
 
 package org.apache.ignite.internal.processors.query;
 
-import java.util.Collection;
 import java.util.List;
-import java.util.UUID;
-
 import org.apache.ignite.cache.query.FieldsQueryCursor;
 import org.apache.ignite.internal.processors.GridProcessor;
 import org.jetbrains.annotations.Nullable;
@@ -42,8 +39,33 @@ public interface QueryEngine extends GridProcessor {
         String schemaName,
         String qry,
         Object... params
-    )
-        throws IgniteSQLException;
+    ) throws IgniteSQLException;
+
+    /**
+     * @param ctx Query context, may be null.
+     * @param schemaName Schema name.
+     * @param qry Query.
+     * @return List of queries' parameters metadata. Size of list depends on number of distinct queries in {@code qry}.
+     * @throws IgniteSQLException If failed.
+     */
+    List<List<GridQueryFieldMetadata>> parameterMetaData(
+        @Nullable QueryContext ctx,
+        String schemaName,
+        String qry
+    ) throws IgniteSQLException;
+
+    /**
+     * @param ctx Query context, may be null.
+     * @param schemaName Schema name.
+     * @param qry Query.
+     * @return List of queries' result sets metadata. Size of list depends on number of distinct queries in {@code qry}.
+     * @throws IgniteSQLException If failed.
+     */
+    List<List<GridQueryFieldMetadata>> resultSetMetaData(
+        @Nullable QueryContext ctx,
+        String schemaName,
+        String qry
+    ) throws IgniteSQLException;
 
     /**
      * @param ctx Query context, may be null.
@@ -59,10 +81,4 @@ public interface QueryEngine extends GridProcessor {
         String qry,
         List<Object[]> batchedParams
     ) throws IgniteSQLException;
-
-    /** */
-    Collection<? extends RunningQuery> runningQueries();
-
-    /** */
-    RunningQuery runningQuery(UUID id);
 }

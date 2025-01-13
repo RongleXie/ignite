@@ -70,7 +70,6 @@ import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteBiInClosure;
 import org.apache.ignite.lang.IgniteClosure;
 import org.apache.ignite.lang.IgnitePredicate;
-import org.apache.ignite.spi.communication.tcp.TcpCommunicationSpi;
 import org.apache.ignite.testframework.GridTestUtils;
 import org.apache.ignite.testframework.junits.common.GridCommonAbstractTest;
 import org.jetbrains.annotations.Nullable;
@@ -80,8 +79,6 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.ignite.cache.CacheAtomicityMode.ATOMIC;
 import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL;
-import static org.apache.ignite.cache.CacheAtomicityMode.TRANSACTIONAL_SNAPSHOT;
-import static org.apache.ignite.cache.CacheMode.LOCAL;
 import static org.apache.ignite.cache.CacheMode.PARTITIONED;
 import static org.apache.ignite.cache.CacheMode.REPLICATED;
 import static org.apache.ignite.cache.CacheRebalanceMode.ASYNC;
@@ -120,21 +117,13 @@ public abstract class GridCacheContinuousQueryAbstractSelfTest extends GridCommo
             cacheCfg.setRebalanceMode(ASYNC);
             cacheCfg.setWriteSynchronizationMode(FULL_SYNC);
             cacheCfg.setNearConfiguration(nearConfiguration());
-
-            if (atomicityMode() != TRANSACTIONAL_SNAPSHOT) {
-                cacheCfg.setCacheStoreFactory(new StoreFactory()); // TODO IGNITE-8582 enable for tx snapshot.
-                cacheCfg.setReadThrough(true); // TODO IGNITE-8582 enable for tx snapshot.
-                cacheCfg.setWriteThrough(true); // TODO IGNITE-8582 enable for tx snapshot.
-            }
-            else
-                cacheCfg.setIndexedTypes(Integer.class, Integer.class);
-
+            cacheCfg.setCacheStoreFactory(new StoreFactory());
+            cacheCfg.setReadThrough(true);
+            cacheCfg.setWriteThrough(true);
             cfg.setCacheConfiguration(cacheCfg);
         }
 
         cfg.setIncludeEventTypes(EVTS_ALL);
-
-        ((TcpCommunicationSpi)cfg.getCommunicationSpi()).setSharedMemoryPort(-1);
 
         return cfg;
     }
@@ -401,9 +390,6 @@ public abstract class GridCacheContinuousQueryAbstractSelfTest extends GridCommo
      */
     @Test
     public void testTwoQueryListener() throws Exception {
-        if (cacheMode() == LOCAL)
-            return;
-
         IgniteCache<Integer, Integer> cache = grid(0).cache(DEFAULT_CACHE_NAME);
         IgniteCache<Integer, Integer> cache1 = grid(1).cache(DEFAULT_CACHE_NAME);
 
@@ -482,9 +468,6 @@ public abstract class GridCacheContinuousQueryAbstractSelfTest extends GridCommo
      */
     @Test
     public void testRestartQuery() throws Exception {
-        if (cacheMode() == LOCAL)
-            return;
-
         IgniteCache<Integer, Integer> cache = grid(0).cache(DEFAULT_CACHE_NAME);
 
         final int parts = grid(0).affinity(DEFAULT_CACHE_NAME).partitions();

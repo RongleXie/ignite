@@ -20,6 +20,7 @@ package org.apache.ignite.internal.client.thin;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.EventListener;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -29,20 +30,32 @@ import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import org.apache.ignite.IgniteBinary;
 import org.apache.ignite.IgniteCheckedException;
+import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.binary.BinaryBasicNameMapper;
 import org.apache.ignite.binary.BinaryObjectException;
 import org.apache.ignite.binary.BinaryType;
+import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.query.FieldsQueryCursor;
 import org.apache.ignite.cache.query.SqlFieldsQuery;
+import org.apache.ignite.client.ClientAtomicConfiguration;
+import org.apache.ignite.client.ClientAtomicLong;
 import org.apache.ignite.client.ClientCache;
 import org.apache.ignite.client.ClientCacheConfiguration;
 import org.apache.ignite.client.ClientCluster;
 import org.apache.ignite.client.ClientClusterGroup;
+import org.apache.ignite.client.ClientCollectionConfiguration;
 import org.apache.ignite.client.ClientCompute;
 import org.apache.ignite.client.ClientException;
+import org.apache.ignite.client.ClientIgniteSet;
 import org.apache.ignite.client.ClientServices;
 import org.apache.ignite.client.ClientTransactions;
 import org.apache.ignite.client.IgniteClient;
 import org.apache.ignite.client.IgniteClientFuture;
+import org.apache.ignite.client.events.ClientFailEvent;
+import org.apache.ignite.client.events.ClientLifecycleEventListener;
+import org.apache.ignite.client.events.ClientStartEvent;
+import org.apache.ignite.client.events.ClientStopEvent;
+import org.apache.ignite.configuration.BinaryConfiguration;
 import org.apache.ignite.configuration.ClientConfiguration;
 import org.apache.ignite.configuration.ClientTransactionConfiguration;
 import org.apache.ignite.internal.MarshallerPlatformIds;
@@ -56,12 +69,19 @@ import org.apache.ignite.internal.binary.BinaryUtils;
 import org.apache.ignite.internal.binary.BinaryWriterExImpl;
 import org.apache.ignite.internal.binary.streams.BinaryInputStream;
 import org.apache.ignite.internal.binary.streams.BinaryOutputStream;
+import org.apache.ignite.internal.client.thin.TcpClientTransactions.TcpClientTransaction;
 import org.apache.ignite.internal.client.thin.io.ClientConnectionMultiplexer;
+import org.apache.ignite.internal.processors.platform.client.ClientStatus;
+import org.apache.ignite.internal.processors.platform.client.IgniteClientException;
+import org.apache.ignite.internal.util.GridArgumentCheck;
+import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgnitePredicate;
+import org.apache.ignite.logger.NullLogger;
 import org.apache.ignite.marshaller.MarshallerContext;
 import org.apache.ignite.marshaller.MarshallerUtils;
 import org.apache.ignite.marshaller.jdk.JdkMarshaller;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Implementation of {@link IgniteClient} over TCP protocol.
@@ -88,11 +108,17 @@ public class TcpIgniteClient implements IgniteClient {
     /** Registered entry listeners for all caches. */
     private final ClientCacheEntryListenersRegistry lsnrsRegistry;
 
+    /** Event listeners. */
+    private final EventListener[] evtLsnrs;
+
     /** Marshaller. */
     private final ClientBinaryMarshaller marsh;
 
     /** Serializer/deserializer. */
     private final ClientUtils serDes;
+
+    /** Logger. */
+    private final IgniteLogger log;
 
     /**
      * Private constructor. Use {@link TcpIgniteClient#start(ClientConfiguration)} to create an instance of
@@ -109,6 +135,8 @@ public class TcpIgniteClient implements IgniteClient {
             BiFunction<ClientChannelConfiguration, ClientConnectionMultiplexer, ClientChannel> chFactory,
             ClientConfiguration cfg
     ) throws ClientException {
+        log = NullLogger.whenNull(cfg.getLogger());
+
         final ClientBinaryMetadataHandler metadataHnd = new ClientBinaryMetadataHandler();
 
         ClientMarshallerContext marshCtx = new ClientMarshallerContext();
@@ -122,8 +150,12 @@ public class TcpIgniteClient implements IgniteClient {
 
         ch = new ReliableChannel(chFactory, cfg, binary);
 
+        evtLsnrs = cfg.getEventListeners() == null ? null : cfg.getEventListeners().clone();
+
         try {
             ch.channelsInit();
+
+            retrieveBinaryConfiguration(cfg);
 
             // Metadata, binary descriptors and user types caches must be cleared so that the
             // client will register all the user types within the cluster once again in case this information
@@ -144,7 +176,7 @@ public class TcpIgniteClient implements IgniteClient {
 
             compute = new ClientComputeImpl(ch, marsh, cluster.defaultClusterGroup());
 
-            services = new ClientServicesImpl(ch, marsh, cluster.defaultClusterGroup());
+            services = new ClientServicesImpl(ch, marsh, cluster.defaultClusterGroup(), log);
 
             lsnrsRegistry = new ClientCacheEntryListenersRegistry();
         }
@@ -157,6 +189,10 @@ public class TcpIgniteClient implements IgniteClient {
     /** {@inheritDoc} */
     @Override public void close() {
         ch.close();
+
+        ClientStopEvent evt = new ClientStopEvent(this);
+
+        triggerLifecycleEventListeners(log, evtLsnrs, lsnr -> lsnr.onClientStop(evt));
     }
 
     /** {@inheritDoc} */
@@ -223,13 +259,17 @@ public class TcpIgniteClient implements IgniteClient {
         ensureCacheName(name);
 
         ch.request(ClientOperation.CACHE_DESTROY, req -> req.out().writeInt(ClientUtils.cacheId(name)));
+        ch.unregisterCacheIfCustomAffinity(name);
     }
 
     /** {@inheritDoc} */
     @Override public IgniteClientFuture<Void> destroyCacheAsync(String name) throws ClientException {
         ensureCacheName(name);
 
-        return ch.requestAsync(ClientOperation.CACHE_DESTROY, req -> req.out().writeInt(ClientUtils.cacheId(name)));
+        return ch.requestAsync(ClientOperation.CACHE_DESTROY, req -> {
+            req.out().writeInt(ClientUtils.cacheId(name));
+            ch.unregisterCacheIfCustomAffinity(name);
+        });
     }
 
     /** {@inheritDoc} */
@@ -284,13 +324,33 @@ public class TcpIgniteClient implements IgniteClient {
         Consumer<PayloadOutputChannel> qryWriter = payloadCh -> {
             BinaryOutputStream out = payloadCh.out();
 
+            byte flags = TcpClientCache.KEEP_BINARY_FLAG_MASK;
+
+            int txId = 0;
+
+            if (payloadCh.clientChannel().protocolCtx().isFeatureSupported(ProtocolBitmaskFeature.TX_AWARE_QUERIES)) {
+                TcpClientTransaction tx = transactions.tx();
+
+                txId = tx == null ? 0 : tx.txId();
+            }
+
             out.writeInt(0); // no cache ID
-            out.writeByte((byte)1); // keep binary
+
+            if (txId != 0) {
+                flags |= TcpClientCache.TRANSACTIONAL_FLAG_MASK;
+
+                out.writeByte(flags);
+                out.writeInt(txId);
+            }
+            else
+                out.writeByte(flags);
+
             serDes.write(qry, out);
         };
 
         return new ClientFieldsQueryCursor<>(new ClientFieldsQueryPager(
             ch,
+            transactions.tx(),
             ClientOperation.QUERY_SQL_FIELDS,
             ClientOperation.QUERY_SQL_FIELDS_CURSOR_GET_PAGE,
             qryWriter,
@@ -329,6 +389,74 @@ public class TcpIgniteClient implements IgniteClient {
         return services.withClusterGroup((ClientClusterGroupImpl)grp);
     }
 
+    /** {@inheritDoc} */
+    @Override public ClientAtomicLong atomicLong(String name, long initVal, boolean create) {
+        return atomicLong(name, null, initVal, create);
+    }
+
+    /** {@inheritDoc} */
+    @Override public ClientAtomicLong atomicLong(String name, ClientAtomicConfiguration cfg, long initVal, boolean create) {
+        GridArgumentCheck.notNull(name, "name");
+
+        if (create) {
+            ch.service(ClientOperation.ATOMIC_LONG_CREATE, out -> {
+                writeString(name, out.out());
+                out.out().writeLong(initVal);
+
+                if (cfg != null) {
+                    out.out().writeBoolean(true);
+                    out.out().writeInt(cfg.getAtomicSequenceReserveSize());
+                    out.out().writeByte(CacheMode.toCode(cfg.getCacheMode()));
+                    out.out().writeInt(cfg.getBackups());
+                    writeString(cfg.getGroupName(), out.out());
+                }
+                else
+                    out.out().writeBoolean(false);
+            }, null);
+        }
+
+        ClientAtomicLong res = new ClientAtomicLongImpl(name, cfg != null ? cfg.getGroupName() : null, ch);
+
+        // Return null when specified atomic long does not exist to match IgniteKernal behavior.
+        if (!create && res.removed())
+            return null;
+
+        return res;
+    }
+
+    /** {@inheritDoc} */
+    @Override public <T> ClientIgniteSet<T> set(String name, @Nullable ClientCollectionConfiguration cfg) {
+        GridArgumentCheck.notNull(name, "name");
+
+        return ch.service(ClientOperation.OP_SET_GET_OR_CREATE, out -> {
+            writeString(name, out.out());
+
+            if (cfg != null) {
+                out.out().writeBoolean(true);
+                out.out().writeByte((byte)cfg.getAtomicityMode().ordinal());
+                out.out().writeByte(CacheMode.toCode(cfg.getCacheMode()));
+                out.out().writeInt(cfg.getBackups());
+                writeString(cfg.getGroupName(), out.out());
+                out.out().writeBoolean(cfg.isColocated());
+            }
+            else
+                out.out().writeBoolean(false);
+        }, in -> {
+            if (!in.in().readBoolean())
+                return null;
+
+            boolean colocated = in.in().readBoolean();
+            int cacheId = in.in().readInt();
+
+            return new ClientIgniteSetImpl<>(ch, serDes, name, colocated, cacheId);
+        });
+    }
+
+    /** Stops cache warmup. */
+    public void stopWarmUp() {
+        ch.service(ClientOperation.OP_STOP_WARMUP, null, null);
+    }
+
     /**
      * Initializes new instance of {@link IgniteClient}.
      *
@@ -336,7 +464,53 @@ public class TcpIgniteClient implements IgniteClient {
      * @return Client with successfully opened thin client connection.
      */
     public static IgniteClient start(ClientConfiguration cfg) throws ClientException {
-        return new TcpIgniteClient(cfg);
+        try {
+            TcpIgniteClient client = new TcpIgniteClient(cfg);
+
+            ClientStartEvent evt = new ClientStartEvent(client, cfg);
+
+            triggerLifecycleEventListeners(client.log, client.evtLsnrs, lsnr -> lsnr.onClientStart(evt));
+
+            return client;
+        }
+        catch (Throwable throwable) {
+            ClientFailEvent evt = new ClientFailEvent(cfg, throwable);
+
+            triggerLifecycleEventListeners(cfg.getLogger(), cfg.getEventListeners(), lsnr -> lsnr.onClientFail(evt));
+
+            throw throwable;
+        }
+    }
+
+    /** */
+    private static void triggerLifecycleEventListeners(
+        @Nullable IgniteLogger log,
+        EventListener[] lsnrs,
+        Consumer<ClientLifecycleEventListener> action
+    ) {
+        if (F.isEmpty(lsnrs))
+            return;
+
+        for (EventListener lsnr: lsnrs) {
+            if (lsnr instanceof ClientLifecycleEventListener) {
+                try {
+                    ClientLifecycleEventListener lsnr0 = (ClientLifecycleEventListener)lsnr;
+
+                    action.accept(lsnr0);
+                }
+                catch (Exception e) {
+                    if (log != null)
+                        log.warning("Exception thrown while consuming event in listener " + lsnr, e);
+                }
+            }
+        }
+    }
+
+    /**
+     * @return Channel.
+     */
+    ReliableChannel reliableChannel() {
+        return ch;
     }
 
     /** @throws IllegalArgumentException if the specified cache name is invalid. */
@@ -370,6 +544,58 @@ public class TcpIgniteClient implements IgniteClient {
         catch (IOException e) {
             throw new BinaryObjectException(e);
         }
+    }
+
+    /** Load cluster binary configration. */
+    private void retrieveBinaryConfiguration(ClientConfiguration cfg) {
+        if (!cfg.isAutoBinaryConfigurationEnabled())
+            return;
+
+        ClientInternalBinaryConfiguration clusterCfg = ch.applyOnDefaultChannel(
+                c -> c.protocolCtx().isFeatureSupported(ProtocolBitmaskFeature.BINARY_CONFIGURATION)
+                ? c.service(ClientOperation.GET_BINARY_CONFIGURATION, null, r -> new ClientInternalBinaryConfiguration(r.in()))
+                : null,
+                ClientOperation.GET_BINARY_CONFIGURATION);
+
+        if (clusterCfg == null)
+            return;
+
+        if (log.isDebugEnabled())
+            log.debug("Cluster binary configuration retrieved: " + clusterCfg);
+
+        BinaryConfiguration resCfg = cfg.getBinaryConfiguration();
+
+        if (resCfg == null)
+            resCfg = new BinaryConfiguration();
+
+        if (resCfg.isCompactFooter() != clusterCfg.compactFooter()) {
+            if (log.isInfoEnabled())
+                log.info("Overriding compact footer setting according to cluster configuration: " +
+                        resCfg.isCompactFooter() + " -> " + clusterCfg.compactFooter());
+
+            resCfg.setCompactFooter(clusterCfg.compactFooter());
+        }
+
+        switch (clusterCfg.binaryNameMapperMode()) {
+            case BASIC_FULL:
+                resCfg.setNameMapper(new BinaryBasicNameMapper().setSimpleName(false));
+                break;
+
+            case BASIC_SIMPLE:
+                resCfg.setNameMapper(new BinaryBasicNameMapper().setSimpleName(true));
+                break;
+
+            case CUSTOM:
+                if (resCfg.getNameMapper() == null || resCfg.getNameMapper() instanceof BinaryBasicNameMapper) {
+                    throw new IgniteClientException(ClientStatus.FAILED,
+                            "Custom binary name mapper is configured on the server, but not on the client. "
+                                    + "Update client BinaryConfigration to match the server.");
+                }
+
+                break;
+        }
+
+        marsh.setBinaryConfiguration(resCfg);
     }
 
     /**
@@ -601,6 +827,7 @@ public class TcpIgniteClient implements IgniteClient {
         }
 
         /** {@inheritDoc} */
+        @SuppressWarnings("rawtypes")
         @Override public Class getClass(int typeId, ClassLoader ldr)
             throws ClassNotFoundException, IgniteCheckedException {
 

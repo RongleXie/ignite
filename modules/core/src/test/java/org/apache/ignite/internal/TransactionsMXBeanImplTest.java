@@ -71,7 +71,7 @@ public class TransactionsMXBeanImplTest extends GridCommonAbstractTest {
     @Override protected void beforeTestsStarted() throws Exception {
         super.beforeTestsStarted();
 
-        testLog = new ListeningTestLogger(false, log);
+        testLog = new ListeningTestLogger(log);
     }
 
     /** {@inheritDoc} */
@@ -231,9 +231,9 @@ public class TransactionsMXBeanImplTest extends GridCommonAbstractTest {
 
         //check new value in client nodes
         for (List<CountDownLatch> list : updateLatches.values()) {
-            CountDownLatch countDownLatch = list.get(0);
+            CountDownLatch latch = list.get(0);
 
-            countDownLatch.await(100, TimeUnit.MILLISECONDS);
+            latch.await(100, TimeUnit.MILLISECONDS);
         }
 
         newTimeout = 300L;
@@ -246,9 +246,9 @@ public class TransactionsMXBeanImplTest extends GridCommonAbstractTest {
 
         //check new value on client nodes
         for (List<CountDownLatch> list : updateLatches.values()) {
-            CountDownLatch countDownLatch = list.get(1);
+            CountDownLatch latch = list.get(1);
 
-            countDownLatch.await(100, TimeUnit.MILLISECONDS);
+            latch.await(100, TimeUnit.MILLISECONDS);
         }
     }
 

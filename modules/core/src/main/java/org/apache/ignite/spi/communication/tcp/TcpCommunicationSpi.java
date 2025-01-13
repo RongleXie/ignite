@@ -196,11 +196,6 @@ import static org.apache.ignite.spi.communication.tcp.internal.TcpConnectionInde
 @IgniteSpiMultipleInstancesSupport(true)
 @IgniteSpiConsistencyChecked(optional = false)
 public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
-    /** @deprecated This constant is not used and will be removed in future releases. */
-    @Deprecated
-    public static final String OUT_OF_RESOURCES_TCP_MSG = "Failed to allocate shared memory segment " +
-        "(switching to TCP, may be slower).";
-
     /** Node attribute that is mapped to node IP addresses (value is <tt>comm.tcp.addrs</tt>). */
     public static final String ATTR_ADDRS = "comm.tcp.addrs";
 
@@ -210,10 +205,6 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
     /** Node attribute that is mapped to node port number (value is <tt>comm.tcp.port</tt>). */
     public static final String ATTR_PORT = "comm.tcp.port";
 
-    /** @deprecated This constant is not used and will be removed in future releases. */
-    @Deprecated
-    public static final String ATTR_SHMEM_PORT = "comm.shmem.tcp.port";
-
     /** Node attribute that is mapped to node's external addresses (value is <tt>comm.tcp.ext-addrs</tt>). */
     public static final String ATTR_EXT_ADDRS = "comm.tcp.ext-addrs";
 
@@ -222,10 +213,6 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
 
     /** Default port which node sets listener to (value is <tt>47100</tt>). */
     public static final int DFLT_PORT = 47100;
-
-    /** @deprecated This constant is not used and will be removed in future releases. */
-    @Deprecated
-    public static final int DFLT_SHMEM_PORT = -1;
 
     /** Default idle connection timeout (value is <tt>10</tt>min). */
     public static final long DFLT_IDLE_CONN_TIMEOUT = 10 * 60_000;
@@ -628,7 +615,7 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
         final Supplier<ClusterNode> locNodeSupplier = () -> getSpiContext().localNode();
         final Supplier<Ignite> igniteExSupplier = this::ignite;
         final Function<UUID, Boolean> pingNode = (nodeId) -> getSpiContext().pingNode(nodeId);
-        final Supplier<FailureProcessor> failureProcessorSupplier =
+        final Supplier<FailureProcessor> failureProcSupplier =
             () -> ignite instanceof IgniteEx ? ((IgniteEx)ignite).context().failure() : null;
         final Supplier<Boolean> isStopped = () -> getSpiContext().isStopping();
 
@@ -677,7 +664,7 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
             clientPool,
             commWorker,
             connectGate,
-            failureProcessorSupplier,
+            failureProcSupplier,
             attributeNames,
             metricsLsnr,
             nioSrvWrapper,
@@ -831,7 +818,7 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
             cfg,
             attributeNames,
             clientPool,
-            failureProcessorSupplier,
+            failureProcSupplier,
             nodeGetter,
             pingNode,
             this::getExceptionRegistry,
@@ -1131,10 +1118,17 @@ public class TcpCommunicationSpi extends TcpCommunicationConfigInitializer {
                 if (stopping)
                     throw new IgniteSpiException("Node is stopping.", t);
 
-                // NodeUnreachableException should not be explicitly logged. Error message will appear if inverse
-                // connection attempt fails as well.
-                if (!(t instanceof NodeUnreachableException))
-                    log.error("Failed to send message to remote node [node=" + node + ", msg=" + msg + ']', t);
+                String msgForLog = "Failed to send message to remote node [node=" + node + ", msg=" + msg + ']';
+
+                if (ClientExceptionsUtils.isClientNodeTopologyException(t, node)
+                    || ClientExceptionsUtils.isAttemptToEstablishDirectConnectionWhenOnlyInverseIsAllowed(t))
+                    log.warning(msgForLog, t);
+                else {
+                    // NodeUnreachableException should not be explicitly logged. Error message will appear if inverse
+                    // connection attempt fails as well.
+                    if (!(t instanceof NodeUnreachableException))
+                        log.error(msgForLog, t);
+                }
 
                 if (t instanceof Error)
                     throw (Error)t;

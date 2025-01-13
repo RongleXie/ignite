@@ -18,7 +18,8 @@
 package org.apache.ignite.internal.processors.cache.persistence.snapshot;
 
 import java.io.File;
-import java.util.Collections;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import org.apache.ignite.IgniteException;
 import org.apache.ignite.configuration.CacheConfiguration;
@@ -47,9 +48,28 @@ import static org.apache.ignite.testframework.GridTestUtils.assertThrowsAnyCause
  */
 public class PlainSnapshotTest extends AbstractSnapshotSelfTest {
     /** Parameters. */
-    @Parameterized.Parameters(name = "Encryption is disabled.")
-    public static Iterable<Boolean> disableEncryption() {
-        return Collections.singletonList(false);
+    @Parameterized.Parameters(name = "encryption={0}, onlyPrimay={1}")
+    public static List<Object[]> disableEncryption() {
+        return Arrays.asList(
+            new Object[]{false, false},
+            new Object[]{false, true}
+        );
+    }
+
+    /** {@link AbstractSnapshotSelfTest.Account} with custom toString method. */
+    private static class AccountOverrideToString extends AbstractSnapshotSelfTest.Account {
+        /**
+         * @param id      User id.
+         * @param balance User balance.
+         */
+        public AccountOverrideToString(int id, int balance) {
+            super(id, balance);
+        }
+
+        /** {@inheritDoc} */
+        @Override public String toString() {
+            return "_" + super.toString();
+        }
     }
 
     /**
@@ -70,13 +90,8 @@ public class PlainSnapshotTest extends AbstractSnapshotSelfTest {
         IgniteEx ig = startGridsWithCache(1, 4096, key -> new AbstractSnapshotSelfTest.Account(key, key),
             new CacheConfiguration<>(DEFAULT_CACHE_NAME));
 
-        for (int i = 4096; i < 8192; i++) {
-            ig.cache(DEFAULT_CACHE_NAME).put(i, new AbstractSnapshotSelfTest.Account(i, i) {
-                @Override public String toString() {
-                    return "_" + super.toString();
-                }
-            });
-        }
+        for (int i = 4096; i < 8192; i++)
+            ig.cache(DEFAULT_CACHE_NAME).put(i, new AccountOverrideToString(i, i));
 
         GridCacheSharedContext<?, ?> cctx = ig.context().cache().context();
         IgniteSnapshotManager mgr = snp(ig);
@@ -85,7 +100,7 @@ public class PlainSnapshotTest extends AbstractSnapshotSelfTest {
         IgniteInternalFuture<?> snpFut = startLocalSnapshotTask(cctx,
             SNAPSHOT_NAME,
             F.asMap(CU.cacheId(DEFAULT_CACHE_NAME), null),
-            false, mgr.localSnapshotSenderFactory().apply(SNAPSHOT_NAME));
+            false, mgr.localSnapshotSenderFactory().apply(SNAPSHOT_NAME, null));
 
         snpFut.get();
 
@@ -140,7 +155,7 @@ public class PlainSnapshotTest extends AbstractSnapshotSelfTest {
 
         IgniteEx clnt = startClientGrid(1);
 
-        IgniteFuture<?> fut = clnt.snapshot().createSnapshot(SNAPSHOT_NAME);
+        IgniteFuture<?> fut = snp(clnt).createSnapshot(SNAPSHOT_NAME, null, false, onlyPrimary);
 
         assertThrowsAnyCause(log,
             fut::get,

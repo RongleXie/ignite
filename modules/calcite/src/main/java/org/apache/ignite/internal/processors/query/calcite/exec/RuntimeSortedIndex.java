@@ -18,16 +18,12 @@ package org.apache.ignite.internal.processors.query.calcite.exec;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.List;
 import java.util.Objects;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.type.RelDataType;
-import org.apache.ignite.internal.cache.query.index.sorted.inline.IndexQueryContext;
+import org.apache.ignite.internal.processors.query.calcite.exec.exp.RangeIterable;
 import org.apache.ignite.internal.util.lang.GridCursor;
 import org.apache.ignite.internal.util.typedef.F;
-import org.jetbrains.annotations.Nullable;
 
 /**
  * Runtime sorted index.
@@ -74,9 +70,12 @@ public class RuntimeSortedIndex<Row> implements RuntimeIndex<Row>, TreeIndex<Row
     }
 
     /** {@inheritDoc} */
-    @Override public GridCursor<Row> find(Row lower, Row upper, IndexQueryContext qctx) {
-        assert qctx == null;
-
+    @Override public GridCursor<Row> find(
+        Row lower,
+        Row upper,
+        boolean lowerInclude,
+        boolean upperInclude
+    ) {
         int firstCol = F.first(collation.getKeys());
 
         Object lowerBound = (lower == null) ? null : ectx.rowHandler().get(firstCol, lower);
@@ -85,7 +84,7 @@ public class RuntimeSortedIndex<Row> implements RuntimeIndex<Row>, TreeIndex<Row
         Row lowerRow = (lowerBound == null) ? null : lower;
         Row upperRow = (upperBound == null) ? null : upper;
 
-        return new Cursor(rows, lowerRow, upperRow);
+        return new SortedListRangeCursor<>(comp, rows, lowerRow, upperRow, lowerInclude, upperInclude);
     }
 
     /**
@@ -94,117 +93,8 @@ public class RuntimeSortedIndex<Row> implements RuntimeIndex<Row>, TreeIndex<Row
     public Iterable<Row> scan(
         ExecutionContext<Row> ectx,
         RelDataType rowType,
-        Predicate<Row> filter,
-        Supplier<Row> lowerBound,
-        Supplier<Row> upperBound
+        RangeIterable<Row> ranges
     ) {
-        return new IndexScan(rowType, this, filter, lowerBound, upperBound);
-    }
-
-    /**
-     * Cursor to navigate through a sorted list with duplicates.
-     */
-    private class Cursor implements GridCursor<Row> {
-        /** List of rows. */
-        private final List<Row> rows;
-
-        /** Upper bound. */
-        private final Row upper;
-
-        /** Current row. */
-        private Row row;
-
-        /** Current index of list element. */
-        private int idx;
-
-        /**
-         * @param rows List of rows.
-         * @param lower Lower bound (inclusive).
-         * @param upper Upper bound (inclusive).
-         */
-        Cursor(List<Row> rows, @Nullable Row lower, @Nullable Row upper) {
-            this.rows = rows;
-            this.upper = upper;
-
-            idx = lower == null ? 0 : lowerBound(rows, lower);
-        }
-
-        /**
-         * Searches the lower bound (skipping duplicates) using a binary search.
-         *
-         * @param rows List of rows.
-         * @param bound Lower bound.
-         * @return Lower bound position in the list.
-         */
-        private int lowerBound(List<Row> rows, Row bound) {
-            int low = 0, high = rows.size() - 1, idx = -1;
-
-            while (low <= high) {
-                int mid = (high - low) / 2 + low;
-                int compRes = comp.compare(rows.get(mid), bound);
-
-                if (compRes > 0)
-                    high = mid - 1;
-                else if (compRes == 0) {
-                    idx = mid;
-                    high = mid - 1;
-                }
-                else
-                    low = mid + 1;
-            }
-
-            return idx == -1 ? low : idx;
-        }
-
-        /** {@inheritDoc} */
-        @Override public boolean next() {
-            if (idx == rows.size() || (upper != null && comp.compare(upper, rows.get(idx)) < 0))
-                return false;
-
-            row = rows.get(idx++);
-
-            return true;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Row get() {
-            return row;
-        }
-    }
-
-    /**
-     *
-     */
-    private class IndexScan extends AbstractIndexScan<Row, Row> {
-        /**
-         * @param rowType Row type.
-         * @param idx Physical index.
-         * @param filter Additional filters.
-         * @param lowerBound Lower index scan bound.
-         * @param upperBound Upper index scan bound.
-         */
-        IndexScan(
-            RelDataType rowType,
-            TreeIndex<Row> idx,
-            Predicate<Row> filter,
-            Supplier<Row> lowerBound,
-            Supplier<Row> upperBound) {
-            super(RuntimeSortedIndex.this.ectx, rowType, idx, filter, lowerBound, upperBound, null);
-        }
-
-        /** {@inheritDoc} */
-        @Override protected Row row2indexRow(Row bound) {
-            return bound;
-        }
-
-        /** {@inheritDoc} */
-        @Override protected Row indexRow2Row(Row row) {
-            return row;
-        }
-
-        /** */
-        @Override protected IndexQueryContext indexQueryContext() {
-            return null;
-        }
+        return new TreeIndexIterable<>(this, ranges);
     }
 }

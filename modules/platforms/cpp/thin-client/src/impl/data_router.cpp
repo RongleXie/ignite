@@ -42,7 +42,7 @@ namespace ignite
         {
             DataRouter::DataRouter(const ignite::thin::IgniteClientConfiguration& cfg) :
                 config(cfg),
-                userThreadPool(0)
+                userThreadPool(cfg.GetUserThreadPoolSize())
             {
                 srand(common::GetRandSeed());
 
@@ -183,7 +183,8 @@ namespace ignite
                     InvalidateChannelLocked(channel);
                 }
 
-                channel.Get()->FailPendingRequests(err);
+                if (channel.IsValid())
+                    channel.Get()->FailPendingRequests(err);
             }
 
             void DataRouter::OnMessageReceived(uint64_t id, const network::DataBuffer& msg)

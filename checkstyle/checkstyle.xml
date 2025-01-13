@@ -185,6 +185,15 @@
         </module>
 
         <module name="Indentation" />
+
+        <module name="LeftCurly"/>
+
+        <module name="RightCurly">
+            <property name="option" value="alone" />
+        </module>
+
+        <!-- Usage of Ignite abbrevations check. -->
+        <module name="org.apache.ignite.tools.checkstyle.IgniteAbbrevationsRule"/>
     </module>
 
     <!--

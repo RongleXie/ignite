@@ -275,8 +275,8 @@ class GridEventConsumeHandler implements GridContinuousHandler {
         if (F.isEmpty(types))
             types = EVTS_ALL;
 
-        p2pUnmarshalFut.listen((fut) -> {
-            if (fut.error() == null) {
+        p2pUnmarshalFut.listen(() -> {
+            if (p2pUnmarshalFut.error() == null) {
                 try {
                     initFilter(filter, ctx);
                 }
@@ -300,7 +300,8 @@ class GridEventConsumeHandler implements GridContinuousHandler {
     private boolean filterDropsEvent(Event evt) {
         try {
             return filter != null && !filter.apply(evt);
-        } catch (NoClassDefFoundError e) {
+        }
+        catch (NoClassDefFoundError e) {
             // Filter might be installed using P2P class loading, so let's be careful and avoid a NCDFE from getting
             // to a Failure Handler.
 

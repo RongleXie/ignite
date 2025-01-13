@@ -92,8 +92,8 @@ class EchoServer implements AutoCloseable {
         /** {@inheritDoc} */
         @Override public void run() {
             while (running) {
-                Socket socket = acceptConnection();
-                workersExecutor.submit(new Worker(socket));
+                Socket sock = acceptConnection();
+                workersExecutor.submit(new Worker(sock));
             }
         }
 
@@ -131,7 +131,8 @@ class EchoServer implements AutoCloseable {
                     }
                     os.write(ch);
                 }
-            } catch (IOException e) {
+            }
+            catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
         }

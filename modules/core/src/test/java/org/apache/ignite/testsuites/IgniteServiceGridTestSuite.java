@@ -39,12 +39,14 @@ import org.apache.ignite.internal.processors.service.GridServiceProxyTopologyIni
 import org.apache.ignite.internal.processors.service.GridServiceReassignmentSelfTest;
 import org.apache.ignite.internal.processors.service.GridServiceSerializationSelfTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceCallContextTest;
+import org.apache.ignite.internal.processors.service.IgniteServiceCallInterceptorTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeployment2ClassLoadersDefaultMarshallerTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeployment2ClassLoadersJdkMarshallerTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeployment2ClassLoadersOptimizedMarshallerTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeploymentClassLoadingDefaultMarshallerTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeploymentClassLoadingJdkMarshallerTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDeploymentClassLoadingOptimizedMarshallerTest;
+import org.apache.ignite.internal.processors.service.IgniteServiceDeploymentFailureTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceDynamicCachesSelfTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceProxyTimeoutInitializedTest;
 import org.apache.ignite.internal.processors.service.IgniteServiceReassignmentTest;
@@ -105,6 +107,7 @@ import org.junit.runners.Suite;
     IgniteServiceDeployment2ClassLoadersDefaultMarshallerTest.class,
     IgniteServiceDeployment2ClassLoadersJdkMarshallerTest.class,
     IgniteServiceDeployment2ClassLoadersOptimizedMarshallerTest.class,
+    IgniteServiceDeploymentFailureTest.class,
 
     GridServiceDeploymentExceptionPropagationTest.class,
     ServiceDeploymentProcessingOnCoordinatorLeftTest.class,
@@ -122,7 +125,8 @@ import org.junit.runners.Suite;
     GridServiceDeployClusterReadOnlyModeTest.class,
     GridServiceClusterReadOnlyModeTest.class,
     IgniteServiceCallContextTest.class,
-    GridServiceMetricsTest.class
+    GridServiceMetricsTest.class,
+    IgniteServiceCallInterceptorTest.class
 })
 public class IgniteServiceGridTestSuite {
     /** */

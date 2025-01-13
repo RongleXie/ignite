@@ -24,6 +24,7 @@ import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalJoin;
 import org.apache.calcite.rel.logical.LogicalProject;
 import org.apache.calcite.rel.logical.LogicalSort;
+import org.apache.calcite.rel.rules.AggregateExpandDistinctAggregatesRule;
 import org.apache.calcite.rel.rules.AggregateMergeRule;
 import org.apache.calcite.rel.rules.CoreRules;
 import org.apache.calcite.rel.rules.FilterJoinRule.FilterIntoJoinRule;
@@ -40,12 +41,16 @@ import org.apache.calcite.rel.rules.SortRemoveRule;
 import org.apache.calcite.tools.Program;
 import org.apache.calcite.tools.RuleSet;
 import org.apache.calcite.tools.RuleSets;
+import org.apache.calcite.util.Optionality;
+import org.apache.ignite.internal.processors.query.calcite.rule.CollectRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.CorrelateToNestedLoopRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.CorrelatedNestedLoopJoinRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.FilterConverterRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.FilterSpoolMergeToHashIndexSpoolRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.FilterSpoolMergeToSortedIndexSpoolRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.HashAggregateConverterRule;
+import org.apache.ignite.internal.processors.query.calcite.rule.IndexCountRule;
+import org.apache.ignite.internal.processors.query.calcite.rule.IndexMinMaxRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.LogicalScanConverterRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.MergeJoinConverterRule;
 import org.apache.ignite.internal.processors.query.calcite.rule.NestedLoopJoinConverterRule;
@@ -184,7 +189,14 @@ public enum PlannerPhase {
                                         .predicate(Aggregate::isSimple)
                                         .anyInputs())).toRule(),
 
-                    CoreRules.AGGREGATE_EXPAND_DISTINCT_AGGREGATES_TO_JOIN,
+                    // Rule is applicable to aggregates without ordering, otherwise application of this rule
+                    // leads to invalid projections (i.e. LISTAGG).
+                    AggregateExpandDistinctAggregatesRule.Config.JOIN
+                        .withOperandSupplier(op -> op.operand(LogicalAggregate.class)
+                            .predicate(agg -> agg.getAggCallList().stream().noneMatch(call ->
+                                    call.getAggregation().requiresGroupOrder() != Optionality.FORBIDDEN))
+                            .anyInputs())
+                        .toRule(),
 
                     SortRemoveRule.Config.DEFAULT
                         .withOperandSupplier(b ->
@@ -195,9 +207,12 @@ public enum PlannerPhase {
                     CoreRules.MINUS_MERGE,
                     CoreRules.INTERSECT_MERGE,
                     CoreRules.UNION_REMOVE,
-                    CoreRules.JOIN_COMMUTE,
                     CoreRules.AGGREGATE_REMOVE,
+                    // Works also as CoreRules#JOIN_COMMUTE and overrides it if defined after.
                     CoreRules.JOIN_COMMUTE_OUTER,
+
+                    PruneEmptyRules.CORRELATE_LEFT_INSTANCE,
+                    PruneEmptyRules.CORRELATE_RIGHT_INSTANCE,
 
                     // Useful of this rule is not clear now.
                     // CoreRules.AGGREGATE_REDUCE_FUNCTIONS,
@@ -226,6 +241,9 @@ public enum PlannerPhase {
                     ValuesConverterRule.INSTANCE,
                     LogicalScanConverterRule.INDEX_SCAN,
                     LogicalScanConverterRule.TABLE_SCAN,
+                    IndexCountRule.INSTANCE,
+                    IndexMinMaxRule.INSTANCE,
+                    CollectRule.INSTANCE,
                     HashAggregateConverterRule.COLOCATED,
                     HashAggregateConverterRule.MAP_REDUCE,
                     SortAggregateConverterRule.COLOCATED,

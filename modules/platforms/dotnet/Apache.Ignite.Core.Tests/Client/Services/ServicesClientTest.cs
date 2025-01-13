@@ -313,7 +313,7 @@ namespace Apache.Ignite.Core.Tests.Client.Services
             Assert.AreEqual(1, svc.Foo(default(uint)));
             Assert.AreEqual(4, svc.Foo(default(ushort)));
 
-            if (!_useBinaryArray)
+            if (!UseBinaryArray)
             {
                 // Array types are not distinguished.
                 Assert.AreEqual(9, svc.Foo(new[] {new Person(0)}));
@@ -322,7 +322,7 @@ namespace Apache.Ignite.Core.Tests.Client.Services
             {
                 Assert.AreEqual(9, svc.Foo(new object[] {new Person(0)}));
                 Assert.AreEqual(10, svc.Foo(new[] {new Person(0)}));
-                Assert.AreEqual(10, svc.Foo(new Person[] {new Person(0)}));
+                Assert.AreEqual(10, svc.Foo(new[] {new Person(0)}));
             }
         }
 
@@ -332,12 +332,12 @@ namespace Apache.Ignite.Core.Tests.Client.Services
         [Test]
         public void TestJavaServiceCall()
         {
-            var serviceName = TestUtils.DeployJavaService(Ignition.GetIgnite());
-            var svc = Client.GetServices().GetServiceProxy<IJavaService>(serviceName);
+            TestUtils.DeployJavaService(Ignition.GetIgnite());
+            var svc = Client.GetServices().GetServiceProxy<IJavaService>(TestUtils.JavaServiceName);
             var binSvc = Client.GetServices()
                 .WithKeepBinary()
                 .WithServerKeepBinary()
-                .GetServiceProxy<IJavaService>(serviceName);
+                .GetServiceProxy<IJavaService>(TestUtils.JavaServiceName);
 
             Assert.IsTrue(svc.isInitialized());
             Assert.IsTrue(svc.isExecuted());
@@ -519,10 +519,9 @@ namespace Apache.Ignite.Core.Tests.Client.Services
         [Ignore("IGNITE-13360")]
         public void TestJavaServiceTimeout()
         {
-            var svcName = TestUtils.DeployJavaService(Ignition.GetIgnite());
+            TestUtils.DeployJavaService(Ignition.GetIgnite());
 
-            var svc = Client.GetServices()
-                .GetServiceProxy<IJavaService>(svcName);
+            var svc = Client.GetServices().GetServiceProxy<IJavaService>(TestUtils.JavaServiceName);
 
             var ex = Assert.Throws<IgniteClientException>(() => svc.sleep(2000));
 

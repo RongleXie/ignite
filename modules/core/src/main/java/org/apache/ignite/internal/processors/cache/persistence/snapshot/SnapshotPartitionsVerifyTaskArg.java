@@ -26,6 +26,7 @@ import org.apache.ignite.cluster.ClusterNode;
 import org.apache.ignite.internal.util.typedef.internal.S;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.internal.visor.VisorDataTransferObject;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Input parameters for checking snapshot partitions consistency task.
@@ -35,10 +36,19 @@ public class SnapshotPartitionsVerifyTaskArg extends VisorDataTransferObject {
     private static final long serialVersionUID = 0L;
 
     /** Cache group names to be verified. */
-    private Collection<String> grpNames;
+    @Nullable private Collection<String> grpNames;
 
     /** The map of distribution of snapshot metadata pieces across the cluster. */
     private Map<ClusterNode, List<SnapshotMetadata>> clusterMetas;
+
+    /** Snapshot directory path. */
+    @Nullable private String snpPath;
+
+    /** If {@code true} check snapshot integrity. */
+    private boolean check;
+
+    /** Incremental snapshot index. */
+    private int incIdx;
 
     /** Default constructor. */
     public SnapshotPartitionsVerifyTaskArg() {
@@ -48,16 +58,28 @@ public class SnapshotPartitionsVerifyTaskArg extends VisorDataTransferObject {
     /**
      * @param grpNames Cache group names to be verified.
      * @param clusterMetas The map of distribution of snapshot metadata pieces across the cluster.
+     * @param snpPath Snapshot directory path.
+     * @param incIdx Incremental snapshot index.
+     * @param check If {@code true} check snapshot integrity.
      */
-    public SnapshotPartitionsVerifyTaskArg(Collection<String> grpNames, Map<ClusterNode, List<SnapshotMetadata>> clusterMetas) {
+    public SnapshotPartitionsVerifyTaskArg(
+        @Nullable Collection<String> grpNames,
+        Map<ClusterNode, List<SnapshotMetadata>> clusterMetas,
+        @Nullable String snpPath,
+        int incIdx,
+        boolean check
+    ) {
         this.grpNames = grpNames;
         this.clusterMetas = clusterMetas;
+        this.snpPath = snpPath;
+        this.incIdx = incIdx;
+        this.check = check;
     }
 
     /**
      * @return Cache group names to be verified.
      */
-    public Collection<String> cacheGroupNames() {
+    @Nullable public Collection<String> cacheGroupNames() {
         return grpNames;
     }
 
@@ -68,16 +90,41 @@ public class SnapshotPartitionsVerifyTaskArg extends VisorDataTransferObject {
         return clusterMetas;
     }
 
+    /**
+     * @return Snapshot directory path.
+     */
+    @Nullable public String snapshotPath() {
+        return snpPath;
+    }
+
+    /**
+     * @return Incremental snapshot index.
+     */
+    public int incrementIndex() {
+        return incIdx;
+    }
+
+    /** @return If {@code true} check snapshot integrity. */
+    public boolean check() {
+        return check;
+    }
+
     /** {@inheritDoc} */
     @Override protected void writeExternalData(ObjectOutput out) throws IOException {
         U.writeCollection(out, grpNames);
         U.writeMap(out, clusterMetas);
+        U.writeString(out, snpPath);
+        out.writeBoolean(check);
+        out.writeInt(incIdx);
     }
 
     /** {@inheritDoc} */
     @Override protected void readExternalData(byte protoVer, ObjectInput in) throws IOException, ClassNotFoundException {
         grpNames = U.readCollection(in);
         clusterMetas = U.readMap(in);
+        snpPath = U.readString(in);
+        check = in.readBoolean();
+        incIdx = in.readInt();
     }
 
     /** {@inheritDoc} */

@@ -23,7 +23,10 @@ import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.sql.type.IntervalSqlType;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.apache.calcite.sql.type.SqlTypeUtil;
+import org.apache.ignite.internal.processors.query.IgniteSQLException;
 import org.apache.ignite.internal.processors.query.calcite.util.TypeUtils;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -36,8 +39,28 @@ public class IgniteRexBuilder extends RexBuilder {
 
     /** {@inheritDoc} */
     @Override protected RexLiteral makeLiteral(@Nullable Comparable o, RelDataType type, SqlTypeName typeName) {
-        if (o != null && typeName == SqlTypeName.DECIMAL && TypeUtils.hasScale(type))
-            return super.makeLiteral(((BigDecimal)o).setScale(type.getScale(), RoundingMode.HALF_UP), type, typeName);
+        if (o != null && typeName == SqlTypeName.DECIMAL) {
+            BigDecimal bd = (BigDecimal)o;
+
+            if (type.getSqlTypeName() == SqlTypeName.BIGINT) {
+                try {
+                    bd.longValueExact();
+                }
+                catch (ArithmeticException e) {
+                    throw new IgniteSQLException(SqlTypeName.BIGINT.getName() + " overflow", e);
+                }
+            }
+
+            if (type instanceof IntervalSqlType) {
+                // TODO Workaround for https://issues.apache.org/jira/browse/CALCITE-6714
+                bd = bd.multiply(((IntervalSqlType)type).getIntervalQualifier().getUnit().multiplier);
+
+                return super.makeLiteral(bd, type, type.getSqlTypeName());
+            }
+
+            if (TypeUtils.hasScale(type) && SqlTypeUtil.isNumeric(type))
+                return super.makeLiteral(bd.setScale(type.getScale(), RoundingMode.HALF_UP), type, typeName);
+        }
 
         return super.makeLiteral(o, type, typeName);
     }

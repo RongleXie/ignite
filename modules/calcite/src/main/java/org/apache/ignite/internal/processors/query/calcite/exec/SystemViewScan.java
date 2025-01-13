@@ -20,18 +20,15 @@ package org.apache.ignite.internal.processors.query.calcite.exec;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import java.util.function.Supplier;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.ignite.internal.processors.query.calcite.exec.RowHandler.RowFactory;
+import org.apache.ignite.internal.processors.query.calcite.exec.exp.RangeCondition;
+import org.apache.ignite.internal.processors.query.calcite.exec.exp.RangeIterable;
 import org.apache.ignite.internal.processors.query.calcite.schema.SystemViewColumnDescriptor;
 import org.apache.ignite.internal.processors.query.calcite.schema.SystemViewTableDescriptorImpl;
 import org.apache.ignite.internal.processors.query.calcite.util.TypeUtils;
 import org.apache.ignite.internal.util.typedef.F;
-import org.apache.ignite.lang.IgniteClosure;
-import org.apache.ignite.lang.IgnitePredicate;
 import org.apache.ignite.spi.systemview.view.FiltrableSystemView;
 import org.apache.ignite.spi.systemview.view.SystemView;
 import org.jetbrains.annotations.Nullable;
@@ -48,13 +45,7 @@ public class SystemViewScan<Row, ViewRow> implements Iterable<Row> {
     private final RowFactory<Row> factory;
 
     /** */
-    private final Supplier<Row> searchRow;
-
-    /** */
-    private final Predicate<Row> filters;
-
-    /** */
-    private final Function<Row, Row> rowTransformer;
+    private final RangeIterable<Row> ranges;
 
     /** Participating colunms. */
     private final ImmutableBitSet requiredColumns;
@@ -69,16 +60,12 @@ public class SystemViewScan<Row, ViewRow> implements Iterable<Row> {
     public SystemViewScan(
         ExecutionContext<Row> ectx,
         SystemViewTableDescriptorImpl<ViewRow> desc,
-        @Nullable Supplier<Row> searchRow,
-        Predicate<Row> filters,
-        Function<Row, Row> rowTransformer,
+        @Nullable RangeIterable<Row> ranges,
         @Nullable ImmutableBitSet requiredColumns
     ) {
         this.ectx = ectx;
         this.desc = desc;
-        this.searchRow = searchRow;
-        this.filters = filters;
-        this.rowTransformer = rowTransformer;
+        this.ranges = ranges;
         this.requiredColumns = requiredColumns;
 
         RelDataType rowType = desc.rowType(ectx.getTypeFactory(), requiredColumns);
@@ -104,10 +91,15 @@ public class SystemViewScan<Row, ViewRow> implements Iterable<Row> {
 
         Iterator<ViewRow> viewIter;
 
-        if (searchRow != null) {
+        if (ranges != null) {
             assert view instanceof FiltrableSystemView : view;
 
-            Row searchValues = searchRow.get();
+            Iterator<RangeCondition<Row>> rangesIter = ranges.iterator();
+            RangeCondition<Row> range = rangesIter.next();
+
+            assert !rangesIter.hasNext();
+
+            Row searchValues = range.lower(); // Lower bound for the hash index should be the same as upper bound.
 
             RowHandler<Row> rowHnd = ectx.rowHandler();
             Map<String, Object> filterMap = null;
@@ -131,18 +123,6 @@ public class SystemViewScan<Row, ViewRow> implements Iterable<Row> {
         else
             viewIter = view.iterator();
 
-        Iterator<Row> iter = F.iterator(
-            viewIter,
-            row -> desc.toRow(ectx, row, factory, requiredColumns),
-            true);
-
-        if (rowTransformer != null || filters != null) {
-            IgniteClosure<Row, Row> trans = rowTransformer == null ? F.identity() : rowTransformer::apply;
-            IgnitePredicate<Row> filter = filters == null ? F.alwaysTrue() : filters::test;
-
-            iter = F.iterator(iter, trans, true, filter);
-        }
-
-        return iter;
+        return F.iterator(viewIter, row -> desc.toRow(ectx, row, factory, requiredColumns), true);
     }
 }

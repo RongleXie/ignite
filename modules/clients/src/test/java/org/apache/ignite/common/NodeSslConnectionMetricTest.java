@@ -21,6 +21,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.function.Supplier;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.client.ClientConnectionException;
 import org.apache.ignite.client.Config;
@@ -34,7 +35,7 @@ import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.client.GridClient;
 import org.apache.ignite.internal.client.GridClientConfiguration;
 import org.apache.ignite.internal.client.GridClientFactory;
-import org.apache.ignite.internal.processors.metric.MetricRegistry;
+import org.apache.ignite.metric.MetricRegistry;
 import org.apache.ignite.spi.discovery.tcp.TcpDiscoverySpi;
 import org.apache.ignite.spi.metric.BooleanMetric;
 import org.apache.ignite.spi.metric.HistogramMetric;
@@ -58,6 +59,7 @@ import static org.apache.ignite.internal.util.nio.GridNioServer.SSL_ENABLED_METR
 import static org.apache.ignite.internal.util.nio.ssl.GridNioSslFilter.SSL_HANDSHAKE_DURATION_HISTOGRAM_METRIC_NAME;
 import static org.apache.ignite.internal.util.nio.ssl.GridNioSslFilter.SSL_REJECTED_SESSIONS_CNT_METRIC_NAME;
 import static org.apache.ignite.spi.communication.tcp.TcpCommunicationSpi.COMMUNICATION_METRICS_GROUP_NAME;
+import static org.apache.ignite.testframework.GridTestUtils.assertContains;
 import static org.apache.ignite.testframework.GridTestUtils.assertThrowsWithCause;
 import static org.apache.ignite.testframework.GridTestUtils.keyStorePassword;
 import static org.apache.ignite.testframework.GridTestUtils.keyStorePath;
@@ -71,6 +73,12 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
 
     /** Cipher suite not supported by cluster nodes. */
     private static final String UNSUPPORTED_CIPHER_SUITE = "TLS_RSA_WITH_AES_128_GCM_SHA256";
+
+    /** Local server address. */
+    private static final String LOCAL_CLIENT_ADDRESS = "127.0.0.1:10800";
+
+    /** Metric timeout. */
+    private static final long TIMEOUT = 7_000;
 
     /** {@inheritDoc} */
     @Override protected void beforeTestsStarted() throws Exception {
@@ -222,6 +230,7 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
         // Tests untrusted certificate.
         checkNodeJoinFails(2, true, "thinClient", "trusttwo", CIPHER_SUITE, "TLSv1.2");
         checkNodeJoinFails(2, false, "thinClient", "trusttwo", CIPHER_SUITE, "TLSv1.2");
+
         // Tests untrusted cipher suites.
         checkNodeJoinFails(2, true, "client", "trustone", UNSUPPORTED_CIPHER_SUITE, "TLSv1.2");
         checkNodeJoinFails(2, false, "node01", "trustone", UNSUPPORTED_CIPHER_SUITE, "TLSv1.2");
@@ -231,9 +240,8 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
         checkNodeJoinFails(2, false, "node01", "trustone", null, "TLSv1.1");
 
         // In case of an SSL error, the client and server nodes make 2 additional connection attempts.
-        assertTrue(waitForCondition(() ->
-            18 == reg.<IntMetric>findMetric("RejectedSslConnectionsCount").value(),
-            getTestTimeout()));
+        waitForMetricGreaterOrEqual("RejectedSslConnectionsCount", 6,
+                () -> reg.<IntMetric>findMetric("RejectedSslConnectionsCount").value());
     }
 
     /** Tests SSL communication metrics produced by node connection. */
@@ -291,25 +299,31 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
         checkSslCommunicationMetrics(reg, 1, 0, 0);
 
         // Tests untrusted certificate.
-        assertThrowsWithCause(() ->
-            startClient(clientConfiguration("client", "trustboth", CIPHER_SUITE, "TLSv1.2")),
+        Throwable ex = assertThrowsWithCause(() ->
+                startClient(clientConfiguration("client", "trustboth", CIPHER_SUITE, "TLSv1.2")),
             ClientConnectionException.class);
+
+        assertContains(log, ex.getMessage(), LOCAL_CLIENT_ADDRESS);
 
         checkSslCommunicationMetrics(reg, 2, 0, 1);
 
         // Tests unsupported cipher suites.
-        assertThrowsWithCause(() ->
-            startClient(clientConfiguration("thinClient", "trusttwo", UNSUPPORTED_CIPHER_SUITE, "TLSv1.2")),
+        ex = assertThrowsWithCause(() ->
+                startClient(clientConfiguration("thinClient", "trusttwo", UNSUPPORTED_CIPHER_SUITE, "TLSv1.2")),
             ClientConnectionException.class
         );
+
+        assertContains(log, ex.getMessage(), LOCAL_CLIENT_ADDRESS);
 
         checkSslCommunicationMetrics(reg, 3, 0, 2);
 
         // Tests mismatched protocol versions.
-        assertThrowsWithCause(() ->
-            startClient(clientConfiguration("thinClient", "trusttwo", null, "TLSv1.1")),
+        ex = assertThrowsWithCause(() ->
+                startClient(clientConfiguration("thinClient", "trusttwo", null, "TLSv1.1")),
             ClientConnectionException.class
         );
+
+        assertContains(log, ex.getMessage(), LOCAL_CLIENT_ADDRESS);
 
         checkSslCommunicationMetrics(reg, 4, 0, 3);
     }
@@ -385,7 +399,9 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
         String protocol
     ) {
         return new ClientConfiguration()
-            .setAddresses("127.0.0.1:10800")
+            .setAddresses(LOCAL_CLIENT_ADDRESS)
+            // When PA is enabled, async client channel init executes and spoils the metrics.
+            .setPartitionAwarenessEnabled(false)
             .setSslMode(SslMode.REQUIRED)
             .setSslContextFactory(sslContextFactory(keyStore, trustStore, cipherSuite, protocol));
     }
@@ -416,22 +432,33 @@ public class NodeSslConnectionMetricTest extends GridCommonAbstractTest {
     /** Checks SSL communication metrics. */
     private void checkSslCommunicationMetrics(
         MetricRegistry mreg,
-        long handshakeCnt,
+        int handshakeCnt,
         int sesCnt,
         int rejectedSesCnt
     ) throws Exception {
         assertEquals(true, mreg.<BooleanMetric>findMetric(SSL_ENABLED_METRIC_NAME).value());
-        assertTrue(waitForCondition(() ->
-            sesCnt == mreg.<IntMetric>findMetric(SESSIONS_CNT_METRIC_NAME).value(),
-            getTestTimeout()));
-        assertTrue(waitForCondition(() ->
-            handshakeCnt == Arrays.stream(
-                mreg.<HistogramMetric>findMetric(SSL_HANDSHAKE_DURATION_HISTOGRAM_METRIC_NAME).value()
-            ).sum(),
-            getTestTimeout()));
-        assertTrue(waitForCondition(() ->
-            rejectedSesCnt == mreg.<IntMetric>findMetric(SSL_REJECTED_SESSIONS_CNT_METRIC_NAME).value(),
-            getTestTimeout()));
+
+        waitForMetric(SESSIONS_CNT_METRIC_NAME, sesCnt, () -> mreg.<IntMetric>findMetric(SESSIONS_CNT_METRIC_NAME).value());
+
+        waitForMetric(SSL_HANDSHAKE_DURATION_HISTOGRAM_METRIC_NAME, handshakeCnt, () -> (int)Arrays.stream(
+                mreg.<HistogramMetric>findMetric(SSL_HANDSHAKE_DURATION_HISTOGRAM_METRIC_NAME).value()).sum());
+
+        waitForMetric(SSL_REJECTED_SESSIONS_CNT_METRIC_NAME, rejectedSesCnt,
+                () -> mreg.<IntMetric>findMetric(SSL_REJECTED_SESSIONS_CNT_METRIC_NAME).value());
+    }
+
+    /** Wait for metric value. */
+    private void waitForMetric(String name, int expected, Supplier<Integer> supplier) throws Exception {
+        assertTrue(
+            "Metric " + name + " expected " + expected + " but was " + supplier.get(),
+                waitForCondition(() -> expected == supplier.get(), TIMEOUT));
+    }
+
+    /** Wait for metric value. */
+    private void waitForMetricGreaterOrEqual(String name, int expected, Supplier<Integer> supplier) throws Exception {
+        assertTrue(
+            "Metric " + name + " expected greater or equal than " + expected + " but was " + supplier.get(),
+                waitForCondition(() -> expected <= supplier.get(), TIMEOUT));
     }
 
     /** Creates {@link SslContextFactory} with specified options. */

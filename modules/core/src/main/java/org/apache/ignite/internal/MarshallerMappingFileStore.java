@@ -17,12 +17,9 @@
 
 package org.apache.ignite.internal;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +28,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.locks.Lock;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteLogger;
+import org.apache.ignite.internal.binary.BinaryUtils;
 import org.apache.ignite.internal.util.GridStripedLock;
 import org.apache.ignite.internal.util.IgniteUtils;
 import org.apache.ignite.internal.util.typedef.internal.U;
@@ -38,6 +36,9 @@ import org.apache.ignite.marshaller.MarshallerContext;
 
 import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
 import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+import static org.apache.ignite.internal.MarshallerPlatformIds.otherPlatforms;
+import static org.apache.ignite.internal.binary.BinaryUtils.MAPPING_FILE_EXTENSION;
+import static org.apache.ignite.internal.processors.cache.persistence.file.FilePageStoreManager.TMP_SUFFIX;
 
 /**
  * File-based persistence provider for {@link MarshallerContextImpl}.
@@ -48,9 +49,6 @@ import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
  * when a classname is requested but is not presented in local cache of {@link MarshallerContextImpl}.
  */
 final class MarshallerMappingFileStore {
-    /** */
-    private static final String FILE_EXTENSION = ".classname";
-
     /** */
     private static final GridStripedLock fileLock = new GridStripedLock(32);
 
@@ -79,15 +77,38 @@ final class MarshallerMappingFileStore {
         fixLegacyFolder();
     }
 
+    /** Drop appropriate mapping file. */
+    void deleteMapping(int typeId) {
+        byte[] allPlatforms = otherPlatforms((byte)-1);
+
+        for (byte platformId : allPlatforms) {
+            String fileName = BinaryUtils.mappingFileName(platformId, typeId);
+
+            File file = new File(mappingDir, fileName);
+
+            if (file.exists()) {
+                if (log.isDebugEnabled()) {
+                    log.debug("Try to remove: " + file.getAbsolutePath());
+                }
+
+                if (!file.delete()) {
+                    final String msg = "Failed to remove mapping for typeId: " + typeId;
+
+                    U.error(log, msg);
+                }
+            }
+        }
+    }
+
     /**
      * @param platformId Platform id.
      * @param typeId Type id.
      * @param typeName Type name.
      */
     public void writeMapping(byte platformId, int typeId, String typeName) {
-        String fileName = getFileName(platformId, typeId);
+        String fileName = BinaryUtils.mappingFileName(platformId, typeId);
 
-        File tmpFile = new File(mappingDir, fileName + ThreadLocalRandom.current().nextInt() + ".tmp");
+        File tmpFile = new File(mappingDir, fileName + ThreadLocalRandom.current().nextInt() + TMP_SUFFIX);
         File file = new File(mappingDir, fileName);
 
         Lock lock = fileLock(fileName);
@@ -119,7 +140,7 @@ final class MarshallerMappingFileStore {
      * @param typeId Type id.
      */
     public String readMapping(byte platformId, int typeId) {
-        return readMapping(getFileName(platformId, typeId));
+        return readMapping(BinaryUtils.mappingFileName(platformId, typeId));
     }
 
     /**
@@ -131,20 +152,7 @@ final class MarshallerMappingFileStore {
         lock.lock();
 
         try {
-            File file = new File(mappingDir, fileName);
-
-            try (FileInputStream in = new FileInputStream(file)) {
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-                    if (file.length() == 0)
-                        return null;
-
-                    return reader.readLine();
-                }
-
-            }
-            catch (IOException ignored) {
-                return null;
-            }
+            return BinaryUtils.readMapping(new File(mappingDir, fileName));
         }
         finally {
             lock.unlock();
@@ -158,10 +166,15 @@ final class MarshallerMappingFileStore {
      * @param marshCtx Marshaller context to register mappings.
      */
     void restoreMappings(MarshallerContext marshCtx) throws IgniteCheckedException {
-        for (File file : mappingDir.listFiles()) {
+        File[] files = mappingDir.listFiles(BinaryUtils::notTmpFile);
+
+        if (files == null)
+            return;
+
+        for (File file : files) {
             String name = file.getName();
 
-            byte platformId = getPlatformId(name);
+            byte platformId = BinaryUtils.mappedFilePlatformId(name);
 
             int typeId = getTypeId(name);
 
@@ -213,7 +226,7 @@ final class MarshallerMappingFileStore {
             "marshaller"
         );
 
-        File legacyTmpDir = new File(legacyDir.toString() + ".tmp");
+        File legacyTmpDir = new File(legacyDir + TMP_SUFFIX);
 
         if (legacyTmpDir.exists() && !IgniteUtils.delete(legacyTmpDir))
             throw new IgniteCheckedException("Failed to delete legacy marshaller mappings dir: "
@@ -245,32 +258,11 @@ final class MarshallerMappingFileStore {
      * @param fileName Name of file with marshaller mapping information.
      * @throws IgniteCheckedException If file name format is broken.
      */
-    private byte getPlatformId(String fileName) throws IgniteCheckedException {
-        String lastSymbol = fileName.substring(fileName.length() - 1);
-
-        byte platformId;
-
-        try {
-            platformId = Byte.parseByte(lastSymbol);
-        }
-        catch (NumberFormatException e) {
-            throw new IgniteCheckedException("Reading marshaller mapping from file "
-                + fileName
-                + " failed; last symbol of file name is expected to be numeric.", e);
-        }
-
-        return platformId;
-    }
-
-    /**
-     * @param fileName Name of file with marshaller mapping information.
-     * @throws IgniteCheckedException If file name format is broken.
-     */
     private int getTypeId(String fileName) throws IgniteCheckedException {
         int typeId;
 
         try {
-            typeId = Integer.parseInt(fileName.substring(0, fileName.indexOf(FILE_EXTENSION)));
+            typeId = Integer.parseInt(fileName.substring(0, fileName.indexOf(MAPPING_FILE_EXTENSION)));
         }
         catch (NumberFormatException e) {
             throw new IgniteCheckedException("Reading marshaller mapping from file "
@@ -279,14 +271,6 @@ final class MarshallerMappingFileStore {
         }
 
         return typeId;
-    }
-
-    /**
-     * @param platformId Platform id.
-     * @param typeId Type id.
-     */
-    String getFileName(byte platformId, int typeId) {
-        return typeId + FILE_EXTENSION + platformId;
     }
 
     /**

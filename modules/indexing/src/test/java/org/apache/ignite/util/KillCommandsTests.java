@@ -20,6 +20,7 @@ package org.apache.ignite.util;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentMap;
@@ -28,20 +29,36 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import javax.cache.Cache;
 import javax.cache.CacheException;
 import javax.cache.event.CacheEntryEvent;
 import org.apache.ignite.IgniteCache;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteException;
+import org.apache.ignite.Ignition;
 import org.apache.ignite.cache.query.ContinuousQuery;
 import org.apache.ignite.cache.query.QueryCursor;
 import org.apache.ignite.cache.query.ScanQuery;
 import org.apache.ignite.cache.query.SqlFieldsQuery;
+import org.apache.ignite.client.ClientConnectionException;
+import org.apache.ignite.client.IgniteClient;
+import org.apache.ignite.cluster.ClusterNode;
+import org.apache.ignite.cluster.ClusterState;
+import org.apache.ignite.compute.ComputeJob;
+import org.apache.ignite.compute.ComputeJobResult;
+import org.apache.ignite.compute.ComputeJobResultPolicy;
+import org.apache.ignite.compute.ComputeTask;
+import org.apache.ignite.compute.ComputeTaskFuture;
+import org.apache.ignite.configuration.ClientConfiguration;
 import org.apache.ignite.internal.IgniteEx;
 import org.apache.ignite.internal.IgniteInternalFuture;
+import org.apache.ignite.internal.IgniteInterruptedCheckedException;
 import org.apache.ignite.internal.processors.cache.GridCacheContext;
 import org.apache.ignite.internal.processors.cache.query.GridCacheQueryManager;
+import org.apache.ignite.internal.processors.task.GridInternal;
 import org.apache.ignite.internal.util.typedef.T3;
 import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.lang.IgniteFuture;
@@ -55,6 +72,7 @@ import org.apache.ignite.transactions.Transaction;
 
 import static org.apache.ignite.internal.managers.systemview.ScanQuerySystemView.SCAN_QRY_SYS_VIEW;
 import static org.apache.ignite.internal.processors.cache.index.AbstractSchemaSelfTest.queryProcessor;
+import static org.apache.ignite.internal.processors.odbc.ClientListenerProcessor.CLIENT_LISTENER_PORT;
 import static org.apache.ignite.internal.processors.service.IgniteServiceProcessor.SVCS_VIEW;
 import static org.apache.ignite.testframework.GridTestUtils.assertThrowsAnyCause;
 import static org.apache.ignite.testframework.GridTestUtils.assertThrowsWithCause;
@@ -270,15 +288,38 @@ class KillCommandsTests {
             return 1;
         });
 
+        doCancelComputeTask(srvs, qryCanceler, fut, false);
+
+        assertTrue(fut.isCancelled());
+
+        computeLatch = new CountDownLatch(1);
+
+        ComputeTaskFuture<Integer> fut2 = cli.compute().executeAsync(new InternalTask(), null);
+
+        doCancelComputeTask(srvs, qryCanceler, fut2, true);
+
+        assertTrue(fut2.isCancelled());
+    }
+
+    /** */
+    private static void doCancelComputeTask(
+        List<IgniteEx> srvs,
+        Consumer<String> qryCanceler,
+        IgniteFuture<?> fut,
+        boolean internal
+    ) throws IgniteInterruptedCheckedException {
         try {
             String[] id = new String[1];
 
             boolean res = waitForCondition(() -> {
                 for (IgniteEx srv : srvs) {
-                    List<List<?>> tasks = execute(srv, "SELECT SESSION_ID FROM SYS.JOBS");
+                    List<List<?>> tasks = execute(srv, "SELECT SESSION_ID, IS_INTERNAL TASK_NAME FROM SYS.JOBS");
 
-                    if (tasks.size() == 1)
+                    if (tasks.size() == 1) {
                         id[0] = (String)tasks.get(0).get(0);
+
+                        assertEquals(internal, tasks.get(0).get(1));
+                    }
                     else
                         return false;
                 }
@@ -301,7 +342,8 @@ class KillCommandsTests {
             }
 
             assertThrowsWithCause(() -> fut.get(TIMEOUT), IgniteException.class);
-        } finally {
+        }
+        finally {
             computeLatch.countDown();
         }
     }
@@ -415,9 +457,14 @@ class KillCommandsTests {
      * @param cli Client node.
      * @param srvs Server nodes.
      * @param qryCanceler Query cancel closure.
+     * @param scanCanceler Scan query cancel closure.
      */
-    public static void doTestCancelContinuousQuery(IgniteEx cli, List<IgniteEx> srvs,
-        BiConsumer<UUID, UUID> qryCanceler) throws Exception {
+    public static void doTestCancelContinuousQuery(
+        IgniteEx cli,
+        List<IgniteEx> srvs,
+        BiConsumer<UUID, UUID> qryCanceler,
+        Consumer<T3<UUID, String, Long>> scanCanceler
+    ) throws Exception {
         IgniteCache<Object, Object> cache = cli.cache(DEFAULT_CACHE_NAME);
 
         ContinuousQuery<Integer, Integer> cq = new ContinuousQuery<>();
@@ -469,6 +516,71 @@ class KillCommandsTests {
 
             assertTrue(srv.configuration().getIgniteInstanceName(), res);
         }
+
+        T3<UUID, String, Long> qryInfo = scanQuery(srvs.get(0));
+
+        scanCanceler.accept(qryInfo);
+    }
+
+    /**
+     * Test cancel of the client connection(s).
+     *
+     * @param srvs Server nodes.
+     * @param cliCanceler Client connection cancel closure.
+     */
+    public static void doTestCancelClientConnection(List<IgniteEx> srvs, BiConsumer<UUID, Long> cliCanceler) {
+        ClientConfiguration cfg = new ClientConfiguration()
+            .setAddressesFinder(() -> new String[] {"127.0.0.1:" + srvs.get(0).localNode().attribute(CLIENT_LISTENER_PORT)})
+            .setPartitionAwarenessEnabled(false);
+
+        IgniteClient cli0 = Ignition.startClient(cfg);
+        IgniteClient cli1 = Ignition.startClient(cfg);
+        IgniteClient cli2 = Ignition.startClient(cfg);
+        IgniteClient cli3 = Ignition.startClient(new ClientConfiguration()
+            .setAddressesFinder(() -> new String[] {"127.0.0.1:" + srvs.get(1).localNode().attribute(CLIENT_LISTENER_PORT)})
+            .setPartitionAwarenessEnabled(false));
+
+        assertEquals(ClusterState.ACTIVE, cli0.cluster().state());
+        assertEquals(ClusterState.ACTIVE, cli1.cluster().state());
+        assertEquals(ClusterState.ACTIVE, cli2.cluster().state());
+        assertEquals(ClusterState.ACTIVE, cli3.cluster().state());
+
+        List<List<?>> conns = execute(srvs.get(0), "SELECT CONNECTION_ID FROM SYS.CLIENT_CONNECTIONS ORDER BY 1");
+
+        cliCanceler.accept(srvs.get(0).localNode().id(), (Long)conns.get(0).get(0));
+
+        Predicate<IgniteClient> checker = cli -> {
+            try {
+                return waitForCondition(() -> {
+                    try {
+                        cli.cluster().state();
+
+                        return false;
+                    }
+                    catch (ClientConnectionException e) {
+                        return true;
+                    }
+                }, 10_000);
+            }
+            catch (Exception e) {
+                return false;
+            }
+        };
+
+        assertTrue(checker.test(cli0));
+        assertEquals(ClusterState.ACTIVE, cli1.cluster().state());
+        assertEquals(ClusterState.ACTIVE, cli2.cluster().state());
+        assertEquals(ClusterState.ACTIVE, cli3.cluster().state());
+
+        cliCanceler.accept(srvs.get(0).localNode().id(), null);
+
+        assertTrue(checker.test(cli1));
+        assertTrue(checker.test(cli2));
+        assertEquals(ClusterState.ACTIVE, cli3.cluster().state());
+
+        cliCanceler.accept(null, null);
+
+        assertTrue(checker.test(cli3));
     }
 
     /** */
@@ -497,6 +609,53 @@ class KillCommandsTests {
         /** {@inheritDoc} */
         @Override public void doTheJob() {
             // No-op.
+        }
+    }
+
+    /** */
+    @GridInternal
+    private static class InternalTask implements ComputeTask<Void, Integer> {
+        /** {@inheritDoc} */
+        @Override public Map<? extends ComputeJob, ClusterNode> map(List<ClusterNode> subgrid, Void arg) throws IgniteException {
+            return subgrid.stream().collect(Collectors.toMap(k -> new InternalJob(), Function.identity()));
+        }
+
+        /** {@inheritDoc} */
+        @Override public ComputeJobResultPolicy result(ComputeJobResult res, List<ComputeJobResult> rcvd) throws IgniteException {
+            return ComputeJobResultPolicy.WAIT;
+        }
+
+        /** {@inheritDoc} */
+        @Override public Integer reduce(List<ComputeJobResult> results) throws IgniteException {
+            results.forEach(obj -> {
+                assertTrue(obj.isCancelled());
+                assertTrue(obj.getData());
+            });
+
+            return 1;
+        }
+
+        /** */
+        private static class InternalJob implements ComputeJob {
+            /** */
+            private boolean canceled;
+
+            /** {@inheritDoc} */
+            @Override public void cancel() {
+                canceled = true;
+            }
+
+            /** {@inheritDoc} */
+            @Override public Object execute() throws IgniteException {
+                try {
+                    computeLatch.await(30_000, TimeUnit.MILLISECONDS);
+                }
+                catch (InterruptedException ignored) {
+                    // No-op.
+                }
+
+                return canceled;
+            }
         }
     }
 }

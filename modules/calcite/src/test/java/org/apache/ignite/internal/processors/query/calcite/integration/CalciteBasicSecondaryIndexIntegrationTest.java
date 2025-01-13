@@ -23,11 +23,11 @@ import org.apache.ignite.cache.CacheMode;
 import org.apache.ignite.cache.QueryEntity;
 import org.apache.ignite.cache.QueryIndex;
 import org.apache.ignite.cache.QueryIndexType;
-import org.apache.ignite.cache.query.SqlFieldsQuery;
 import org.apache.ignite.cache.query.annotations.QuerySqlField;
 import org.apache.ignite.configuration.CacheConfiguration;
-import org.apache.ignite.internal.processors.query.GridQueryProcessor;
+import org.apache.ignite.internal.processors.query.QueryUtils;
 import org.apache.ignite.internal.processors.query.calcite.CalciteQueryProcessorTest;
+import org.apache.ignite.internal.processors.query.calcite.hint.HintDefinition;
 import org.apache.ignite.internal.util.typedef.F;
 import org.junit.Ignore;
 import org.junit.Test;
@@ -40,15 +40,19 @@ import static org.apache.ignite.internal.processors.query.calcite.QueryChecker.c
 import static org.apache.ignite.internal.processors.query.calcite.QueryChecker.containsSubPlan;
 import static org.apache.ignite.internal.processors.query.calcite.QueryChecker.containsTableScan;
 import static org.apache.ignite.internal.processors.query.calcite.QueryChecker.containsUnion;
-import static org.apache.ignite.internal.processors.query.h2.H2TableDescriptor.AFFINITY_KEY_IDX_NAME;
-import static org.apache.ignite.internal.processors.query.h2.H2TableDescriptor.PK_IDX_NAME;
-import static org.apache.ignite.internal.processors.query.h2.opt.GridH2Table.generateProxyIdxName;
+import static org.apache.ignite.internal.processors.query.schema.management.SchemaManager.generateProxyIdxName;
 import static org.hamcrest.CoreMatchers.not;
 
 /**
  * Basic index tests.
  */
-public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicIntegrationTest {
+public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicIntegrationTransactionalTest {
+    /** */
+    private static final String PK_IDX_NAME = QueryUtils.PRIMARY_KEY_INDEX;
+
+    /** */
+    private static final String AFFINITY_KEY_IDX_NAME = QueryUtils.AFFINITY_KEY_INDEX;
+
     /** */
     private static final String DEPID_IDX = "DEPID_IDX";
 
@@ -65,8 +69,8 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     private static final String NAME_DATE_IDX = "NAME_DATE_IDX";
 
     /** {@inheritDoc} */
-    @Override protected void beforeTestsStarted() throws Exception {
-        super.beforeTestsStarted();
+    @Override protected void init() throws Exception {
+        super.init();
 
         QueryEntity projEntity = new QueryEntity();
         projEntity.setKeyType(Integer.class.getName());
@@ -101,35 +105,6 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
 
         IgniteCache<Integer, Developer> devCache = client.createCache(projCfg);
 
-        devCache.put(1, new Developer("Mozart", 3, "Vienna", 33));
-        devCache.put(2, new Developer("Beethoven", 2, "Vienna", 44));
-        devCache.put(3, new Developer("Bach", 1, "Leipzig", 55));
-        devCache.put(4, new Developer("Strauss", 2, "Munich", 66));
-
-        devCache.put(5, new Developer("Vagner", 4, "Leipzig", 70));
-        devCache.put(6, new Developer("Chaikovsky", 5, "Votkinsk", 53));
-        devCache.put(7, new Developer("Verdy", 6, "Rankola", 88));
-        devCache.put(8, new Developer("Stravinsky", 7, "Spt", 89));
-        devCache.put(9, new Developer("Rahmaninov", 8, "Starorussky ud", 70));
-        devCache.put(10, new Developer("Shubert", 9, "Vienna", 31));
-        devCache.put(11, new Developer("Glinka", 10, "Smolenskaya gb", 53));
-
-        devCache.put(12, new Developer("Einaudi", 11, "", -1));
-        devCache.put(13, new Developer("Glass", 12, "", -1));
-        devCache.put(14, new Developer("Rihter", 13, "", -1));
-
-        devCache.put(15, new Developer("Marradi", 14, "", -1));
-        devCache.put(16, new Developer("Zimmer", 15, "", -1));
-        devCache.put(17, new Developer("Hasaishi", 16, "", -1));
-
-        devCache.put(18, new Developer("Arnalds", 17, "", -1));
-        devCache.put(19, new Developer("Yiruma", 18, "", -1));
-        devCache.put(20, new Developer("O'Halloran", 19, "", -1));
-
-        devCache.put(21, new Developer("Cacciapaglia", 20, "", -1));
-        devCache.put(22, new Developer("Prokofiev", 21, "", -1));
-        devCache.put(23, new Developer("Musorgskii", 22, "", -1));
-
         QueryEntity bdEntity = new QueryEntity();
         bdEntity.setKeyType(Integer.class.getName());
         bdEntity.setKeyFieldName("id");
@@ -154,16 +129,8 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
 
         IgniteCache<Integer, Birthday> bdCache = client.createCache(bdCfg);
 
-        bdCache.put(1, new Birthday("Mozart", Date.valueOf("1756-01-27")));
-        bdCache.put(2, new Birthday("Beethoven", null));
-        bdCache.put(3, new Birthday("Bach", Date.valueOf("1685-03-31")));
-        bdCache.put(4, new Birthday("Strauss", Date.valueOf("1864-06-11")));
-        bdCache.put(5, new Birthday("Vagner", Date.valueOf("1813-05-22")));
-        bdCache.put(6, new Birthday("Chaikovsky", Date.valueOf("1840-05-07")));
-        bdCache.put(7, new Birthday("Verdy", Date.valueOf("1813-10-10")));
-
         IgniteCache<CalciteQueryProcessorTest.Key, CalciteQueryProcessorTest.Developer> tblWithAff =
-            client.getOrCreateCache(new CacheConfiguration<CalciteQueryProcessorTest.Key, CalciteQueryProcessorTest.Developer>()
+            client.getOrCreateCache(this.<CalciteQueryProcessorTest.Key, CalciteQueryProcessorTest.Developer>cacheConfiguration()
                 .setName("TBL_WITH_AFF_KEY")
                 .setSqlSchema("PUBLIC")
                 .setBackups(1)
@@ -171,11 +138,8 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
                 .setTableName("TBL_WITH_AFF_KEY")))
         );
 
-        tblWithAff.put(new CalciteQueryProcessorTest.Key(1, 2), new CalciteQueryProcessorTest.Developer("Petr", 10));
-        tblWithAff.put(new CalciteQueryProcessorTest.Key(2, 3), new CalciteQueryProcessorTest.Developer("Ivan", 11));
-
         IgniteCache<Integer, CalciteQueryProcessorTest.Developer> tblConstrPk =
-            client.getOrCreateCache(new CacheConfiguration<Integer, CalciteQueryProcessorTest.Developer>()
+            client.getOrCreateCache(this.<Integer, CalciteQueryProcessorTest.Developer>cacheConfiguration()
                 .setName("TBL_CONSTR_PK")
                 .setSqlSchema("PUBLIC")
                 .setBackups(0)
@@ -185,22 +149,60 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
                     .addQueryField("id", Integer.class.getName(), null)))
             );
 
-        tblConstrPk.put(1, new CalciteQueryProcessorTest.Developer("Petr", 10));
-        tblConstrPk.put(2, new CalciteQueryProcessorTest.Developer("Ivan", 11));
+        executeSql("CREATE TABLE PUBLIC.UNWRAP_PK" + " (F1 VARCHAR, F2 BIGINT, F3 BIGINT, F4 BIGINT, " +
+            "CONSTRAINT PK PRIMARY KEY (F2, F1)) WITH \"backups=0, affinity_key=F1," + atomicity() + "\"");
 
-        GridQueryProcessor qryProc = client.context().query();
+        put(client, devCache, 1, new Developer("Mozart", 3, "Vienna", 33));
+        put(client, devCache, 2, new Developer("Beethoven", 2, "Vienna", 44));
+        put(client, devCache, 3, new Developer("Bach", 1, "Leipzig", 55));
+        put(client, devCache, 4, new Developer("Strauss", 2, "Munich", 66));
 
-        qryProc.querySqlFields(new SqlFieldsQuery("CREATE TABLE PUBLIC.UNWRAP_PK" + " (F1 VARCHAR, F2 LONG, F3 LONG, F4 LONG, " +
-            "CONSTRAINT PK PRIMARY KEY (F2, F1)) WITH \"backups=0, affinity_key=F1\""), true).getAll();
+        put(client, devCache, 5, new Developer("Vagner", 4, "Leipzig", 70));
+        put(client, devCache, 6, new Developer("Chaikovsky", 5, "Votkinsk", 53));
+        put(client, devCache, 7, new Developer("Verdy", 6, "Rankola", 88));
+        put(client, devCache, 8, new Developer("Stravinsky", 7, "Spt", 89));
+        put(client, devCache, 9, new Developer("Rahmaninov", 8, "Starorussky ud", 70));
+        put(client, devCache, 10, new Developer("Shubert", 9, "Vienna", 31));
+        put(client, devCache, 11, new Developer("Glinka", 10, "Smolenskaya gb", 53));
 
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Petr', 1, 2, 3)"), true);
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan', 2, 2, 4)"), true);
+        put(client, devCache, 12, new Developer("Einaudi", 11, "", -1));
+        put(client, devCache, 13, new Developer("Glass", 12, "", -1));
+        put(client, devCache, 14, new Developer("Rihter", 13, "", -1));
 
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan1', 21, 2, 4)"), true);
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan2', 22, 2, 4)"), true);
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan3', 23, 2, 4)"), true);
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan4', 24, 2, 4)"), true);
-        qryProc.querySqlFields(new SqlFieldsQuery("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan5', 25, 2, 4)"), true);
+        put(client, devCache, 15, new Developer("Marradi", 14, "", -1));
+        put(client, devCache, 16, new Developer("Zimmer", 15, "", -1));
+        put(client, devCache, 17, new Developer("Hasaishi", 16, "", -1));
+
+        put(client, devCache, 18, new Developer("Arnalds", 17, "", -1));
+        put(client, devCache, 19, new Developer("Yiruma", 18, "", -1));
+        put(client, devCache, 20, new Developer("O'Halloran", 19, "", -1));
+
+        put(client, devCache, 21, new Developer("Cacciapaglia", 20, "", -1));
+        put(client, devCache, 22, new Developer("Prokofiev", 21, "", -1));
+        put(client, devCache, 23, new Developer("Musorgskii", 22, "", -1));
+
+        put(client, bdCache, 1, new Birthday("Mozart", Date.valueOf("1756-01-27")));
+        put(client, bdCache, 2, new Birthday("Beethoven", null));
+        put(client, bdCache, 3, new Birthday("Bach", Date.valueOf("1685-03-31")));
+        put(client, bdCache, 4, new Birthday("Strauss", Date.valueOf("1864-06-11")));
+        put(client, bdCache, 5, new Birthday("Vagner", Date.valueOf("1813-05-22")));
+        put(client, bdCache, 6, new Birthday("Chaikovsky", Date.valueOf("1840-05-07")));
+        put(client, bdCache, 7, new Birthday("Verdy", Date.valueOf("1813-10-10")));
+
+        put(client, tblWithAff, new CalciteQueryProcessorTest.Key(1, 2), new CalciteQueryProcessorTest.Developer("Petr", 10));
+        put(client, tblWithAff, new CalciteQueryProcessorTest.Key(2, 3), new CalciteQueryProcessorTest.Developer("Ivan", 11));
+
+        put(client, tblConstrPk, 1, new CalciteQueryProcessorTest.Developer("Petr", 10));
+        put(client, tblConstrPk, 2, new CalciteQueryProcessorTest.Developer("Ivan", 11));
+
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Petr', 1, 2, 3)");
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan', 2, 2, 4)");
+
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan1', 21, 2, 4)");
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan2', 22, 2, 4)");
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan3', 23, 2, 4)");
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan4', 24, 2, 4)");
+        executeSql("INSERT INTO PUBLIC.UNWRAP_PK(F1, F2, F3, F4) values ('Ivan5', 25, 2, 4)");
 
         awaitPartitionMapExchange();
     }
@@ -217,7 +219,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
 
     /** */
     private <K, V> CacheConfiguration<K, V> cache(QueryEntity ent) {
-        return new CacheConfiguration<K, V>(ent.getTableName())
+        return this.<K, V>cacheConfiguration().setName(ent.getTableName())
             .setCacheMode(CacheMode.PARTITIONED)
             .setBackups(1)
             .setQueryEntities(singletonList(ent))
@@ -228,7 +230,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     @Test
     public void testEqualsFilterWithUnwrpKey() {
         assertQuery("SELECT F1 FROM UNWRAP_PK WHERE F2=2")
-            .matches(containsIndexScan("PUBLIC", "UNWRAP_PK", PK_IDX_NAME))
+            .matches(containsIndexScan("PUBLIC", "UNWRAP_PK", QueryUtils.PRIMARY_KEY_INDEX))
             .returns("Ivan")
             .check();
     }
@@ -237,7 +239,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     @Test
     public void testEqualsFilterWithUnwrpKeyAndAff() {
         assertQuery("SELECT F2 FROM UNWRAP_PK WHERE F1='Ivan'")
-            .matches(containsIndexScan("PUBLIC", "UNWRAP_PK", AFFINITY_KEY_IDX_NAME))
+            .matches(containsIndexScan("PUBLIC", "UNWRAP_PK", QueryUtils.AFFINITY_KEY_INDEX))
             .check();
     }
 
@@ -245,7 +247,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     @Test
     public void testIndexLoopJoin() {
         assertQuery("" +
-            "SELECT /*+ DISABLE_RULE('MergeJoinConverter', 'NestedLoopJoinConverter') */ d1.name, d2.name " +
+            "SELECT /*+ " + HintDefinition.CNL_JOIN + " */ d1.name, d2.name " +
             "FROM Developer d1, Developer d2 WHERE d1.id = d2.id")
             .matches(containsSubPlan("IgniteCorrelatedNestedLoopJoin"))
             .returns("Bach", "Bach")
@@ -278,7 +280,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     @Test
     public void testMergeJoin() {
         assertQuery("" +
-            "SELECT /*+ DISABLE_RULE('CorrelatedNestedLoopJoin') */ d1.name, d2.name FROM Developer d1, Developer d2 " +
+            "SELECT /*+ " + HintDefinition.MERGE_JOIN + " */ d1.name, d2.name FROM Developer d1, Developer d2 " +
             "WHERE d1.depId = d2.depId")
             .matches(containsSubPlan("IgniteMergeJoin"))
             .returns("Bach", "Bach")
@@ -880,10 +882,8 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
 
     /** */
     @Test
-    @Ignore("https://issues.apache.org/jira/browse/IGNITE-13710")
     public void testOrCondition2() {
         assertQuery("SELECT * FROM Developer WHERE name='Mozart' AND (depId=1 OR depId=3)")
-            .matches(containsUnion(true))
             .matches(containsIndexScan("PUBLIC", "DEVELOPER", NAME_DEPID_CITY_IDX))
             .returns(1, "Mozart", 3, "Vienna", 33)
             .check();
@@ -891,10 +891,8 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
 
     /** */
     @Test
-    @Ignore("https://issues.apache.org/jira/browse/IGNITE-13710")
     public void testOrCondition3() {
         assertQuery("SELECT * FROM Developer WHERE name='Mozart' AND (age > 22 AND (depId=1 OR depId=3))")
-            .matches(containsUnion(true))
             .matches(containsIndexScan("PUBLIC", "DEVELOPER", NAME_DEPID_CITY_IDX))
             .returns(1, "Mozart", 3, "Vienna", 33)
             .check();
@@ -904,8 +902,7 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     @Test
     public void testOrCondition4() {
         assertQuery("SELECT * FROM Developer WHERE depId=1 OR (name='Mozart' AND depId=3)")
-            .matches(containsUnion(true))
-            .matches(containsIndexScan("PUBLIC", "DEVELOPER", NAME_DEPID_CITY_IDX))
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
             .returns(1, "Mozart", 3, "Vienna", 33)
             .returns(3, "Bach", 1, "Leipzig", 55)
             .check();
@@ -1115,6 +1112,74 @@ public class CalciteBasicSecondaryIndexIntegrationTest extends AbstractBasicInte
     public void testToPlanQueryWithAllOperator() {
         assertQuery("SELECT name FROM Developer WHERE age > ALL ( SELECT 88 )")
             .returns("Stravinsky")
+            .check();
+    }
+
+    /**
+     * Test index search bounds merge.
+     */
+    @Test
+    public void testIndexBoundsMerge() {
+        assertQuery("SELECT id FROM Developer WHERE depId > 19 AND depId > ?")
+            .withParams(20)
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
+            .returns(22)
+            .returns(23)
+            .check();
+
+        assertQuery("SELECT id FROM Developer WHERE depId > 20 AND depId > ?")
+            .withParams(19)
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
+            .returns(22)
+            .returns(23)
+            .check();
+
+        assertQuery("SELECT id FROM Developer WHERE depId >= 20 AND depId > ?")
+            .withParams(19)
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
+            .returns(21)
+            .returns(22)
+            .returns(23)
+            .check();
+
+        assertQuery("SELECT id FROM Developer WHERE depId BETWEEN ? AND ? AND depId > 19")
+            .withParams(19, 21)
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
+            .returns(21)
+            .returns(22)
+            .check();
+
+        // Index with DESC ordering.
+        assertQuery("SELECT id FROM Birthday WHERE name BETWEEN 'B' AND 'D' AND name > ?")
+            .withParams("Bach")
+            .matches(containsIndexScan("PUBLIC", "BIRTHDAY", NAME_DATE_IDX))
+            .returns(2)
+            .returns(6)
+            .check();
+    }
+
+    /**
+     * Test index search bounds on complex index expression.
+     */
+    @Test
+    public void testComplexIndexExpression() {
+        assertQuery("SELECT id FROM Developer WHERE depId BETWEEN ? - 1 AND ? + 1")
+            .withParams(20, 20)
+            .matches(containsIndexScan("PUBLIC", "DEVELOPER", DEPID_IDX))
+            .returns(20)
+            .returns(21)
+            .returns(22)
+            .check();
+
+        assertQuery("SELECT id FROM Birthday WHERE name = SUBSTRING(?::VARCHAR, 1, 4)")
+            .withParams("BachBach")
+            .matches(containsIndexScan("PUBLIC", "BIRTHDAY", NAME_DATE_IDX))
+            .returns(3)
+            .check();
+
+        assertQuery("SELECT id FROM Birthday WHERE name = SUBSTRING(name, 1, 4)")
+            .matches(containsTableScan("PUBLIC", "BIRTHDAY"))
+            .returns(3)
             .check();
     }
 

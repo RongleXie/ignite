@@ -27,7 +27,6 @@ import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlCall;
 import org.apache.calcite.sql.SqlIntervalQualifier;
-import org.apache.calcite.sql.SqlLiteral;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParserPos;
 import org.apache.calcite.sql.type.SqlTypeName;
@@ -47,7 +46,7 @@ public class IgniteConvertletTable extends ReflectiveConvertletTable {
     public static final IgniteConvertletTable INSTANCE = new IgniteConvertletTable();
 
     /** */
-    private IgniteConvertletTable() {
+    protected IgniteConvertletTable() {
         // Replace Calcite's convertlet with our own.
         registerOp(SqlStdOperatorTable.TIMESTAMP_DIFF, new TimestampDiffConvertlet());
 
@@ -69,8 +68,8 @@ public class IgniteConvertletTable extends ReflectiveConvertletTable {
             // TIMESTAMPDIFF(unit, t1, t2)
             //    => (t2 - t1) UNIT
             final RexBuilder rexBuilder = cx.getRexBuilder();
-            final SqlLiteral unitLiteral = call.operand(0);
-            TimeUnit unit = unitLiteral.getValueAs(TimeUnit.class);
+            final SqlIntervalQualifier unitLiteral = call.operand(0);
+            TimeUnit unit = unitLiteral.getUnit();
             BigDecimal multiplier = BigDecimal.ONE;
             BigDecimal divider = BigDecimal.ONE;
             SqlTypeName sqlTypeName = unit == TimeUnit.NANOSECOND

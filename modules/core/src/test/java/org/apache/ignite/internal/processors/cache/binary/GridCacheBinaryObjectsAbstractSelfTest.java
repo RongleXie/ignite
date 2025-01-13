@@ -56,7 +56,6 @@ import org.apache.ignite.configuration.IgniteConfiguration;
 import org.apache.ignite.configuration.NearCacheConfiguration;
 import org.apache.ignite.internal.IgniteKernal;
 import org.apache.ignite.internal.binary.BinaryContext;
-import org.apache.ignite.internal.binary.BinaryMarshaller;
 import org.apache.ignite.internal.binary.BinaryObjectImpl;
 import org.apache.ignite.internal.binary.BinaryObjectOffheapImpl;
 import org.apache.ignite.internal.processors.cache.GridCacheAdapter;
@@ -109,7 +108,6 @@ public abstract class GridCacheBinaryObjectsAbstractSelfTest extends GridCommonA
         binKeysCacheCfg.setName("BinKeysCache");
 
         cfg.setCacheConfiguration(cacheCfg, binKeysCacheCfg);
-        cfg.setMarshaller(new BinaryMarshaller());
 
         List<BinaryTypeConfiguration> binTypes = new ArrayList<>();
 
@@ -124,9 +122,9 @@ public abstract class GridCacheBinaryObjectsAbstractSelfTest extends GridCommonA
 
         cfg.setBinaryConfiguration(binCfg);
 
-        CacheKeyConfiguration arrayHashCfg = new CacheKeyConfiguration("ArrayHashedKey", "fld1");
+        CacheKeyConfiguration arrHashCfg = new CacheKeyConfiguration("ArrayHashedKey", "fld1");
 
-        cfg.setCacheKeyConfiguration(arrayHashCfg);
+        cfg.setCacheKeyConfiguration(arrHashCfg);
 
         GridCacheBinaryObjectsAbstractSelfTest.cfg = cfg;
 
@@ -1210,12 +1208,10 @@ public abstract class GridCacheBinaryObjectsAbstractSelfTest extends GridCommonA
 
         checkTransform(primaryKey(c));
 
-        if (cacheMode() != CacheMode.LOCAL) {
-            checkTransform(backupKey(c));
+        checkTransform(backupKey(c));
 
-            if (nearConfiguration() != null)
-                checkTransform(nearKey(c));
-        }
+        if (nearConfiguration() != null)
+            checkTransform(nearKey(c));
     }
 
     /**

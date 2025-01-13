@@ -17,6 +17,7 @@
 
 package org.apache.ignite.internal.processors.query.calcite.trait;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -52,6 +53,8 @@ import org.apache.calcite.util.ControlFlowException;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.Pair;
 import org.apache.calcite.util.mapping.Mappings;
+import org.apache.ignite.internal.processors.query.calcite.externalize.RelInputEx;
+import org.apache.ignite.internal.processors.query.calcite.prepare.bounds.SearchBounds;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteConvention;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteExchange;
 import org.apache.ignite.internal.processors.query.calcite.rel.IgniteRel;
@@ -132,7 +135,7 @@ public class TraitUtils {
 
         RelTraitSet traits = rel.getTraitSet().replace(toTrait);
 
-        return new IgniteSort(rel.getCluster(), traits, rel, toTrait);
+        return new IgniteSort(rel.getCluster(), traits, rel, toTrait, true);
     }
 
     /** */
@@ -142,6 +145,10 @@ public class TraitUtils {
 
         if (fromTrait.satisfies(toTrait))
             return rel;
+
+        // Cannot enforce node to correlated distribution, this distribution is only set by trait propagation.
+        if (toTrait.function().correlated())
+            return null;
 
         // right now we cannot create a multi-column affinity
         // key object, thus this conversion is impossible
@@ -266,7 +273,7 @@ public class TraitUtils {
 
         RelTraitSet traitSet0 = traitSet;
 
-        return new RelInput() {
+        return new RelInputEx() {
             @Override public RelOptCluster getCluster() {
                 return input.getCluster();
             }
@@ -315,6 +322,10 @@ public class TraitUtils {
                 return input.getFloat(tag);
             }
 
+            @Override public BigDecimal getBigDecimal(String tag) {
+                return input.getBigDecimal(tag);
+            }
+
             @Override public <E extends Enum<E>> E getEnum(String tag, Class<E> enumClass) {
                 return input.getEnum(tag, enumClass);
             }
@@ -358,6 +369,14 @@ public class TraitUtils {
 
             @Override public boolean getBoolean(String tag, boolean default_) {
                 return input.getBoolean(tag, default_);
+            }
+
+            @Override public RelCollation getCollation(String tag) {
+                return ((RelInputEx)input).getCollation(tag);
+            }
+
+            @Override public List<SearchBounds> getSearchBounds(String tag) {
+                return ((RelInputEx)input).getSearchBounds(tag);
             }
         };
     }
@@ -442,8 +461,7 @@ public class TraitUtils {
         Set<Pair<RelTraitSet, List<RelTraitSet>>> result,
         RelTraitSet[] combination,
         int idx
-    ) throws ControlFlowException
-    {
+    ) throws ControlFlowException {
         boolean processed = false, last = idx == inTraits.size() - 1;
         for (RelTraitSet t : inTraits.get(idx)) {
             assert t.getConvention() == IgniteConvention.INSTANCE;

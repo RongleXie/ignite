@@ -227,7 +227,8 @@ public class BlockedEvictionsTest extends GridCommonAbstractTest {
                             // No-op.
                         }
                     }, true).get(5_000);
-                } catch (IgniteCheckedException e) {
+                }
+                catch (IgniteCheckedException e) {
                     fail(X.getFullStackTrace(e));
                 }
             }
@@ -262,20 +263,21 @@ public class BlockedEvictionsTest extends GridCommonAbstractTest {
 
         try {
             ref.get().get(10_000);
-        } catch (IgniteFutureTimeoutCheckedException e) {
+        }
+        catch (IgniteFutureTimeoutCheckedException e) {
             fail(X.getFullStackTrace(e));
         }
 
         PartitionsEvictManager mgr = grid(0).context().cache().context().evict();
 
         // Group eviction context should remain in map.
-        Map evictionGroupsMap = U.field(mgr, "evictionGroupsMap");
+        Map evictionGrpsMap = U.field(mgr, "evictionGroupsMap");
 
-        assertEquals("Group context must be cleaned up", 0, evictionGroupsMap.size());
+        assertEquals("Group context must be cleaned up", 0, evictionGrpsMap.size());
 
         grid(0).getOrCreateCache(cacheConfiguration());
 
-        assertEquals(0, evictionGroupsMap.size());
+        assertEquals(0, evictionGrpsMap.size());
 
         assertPartitionsSame(idleVerify(grid(0), DEFAULT_CACHE_NAME));
     }
@@ -305,7 +307,8 @@ public class BlockedEvictionsTest extends GridCommonAbstractTest {
 
         try {
             ref.get().get(10_000);
-        } catch (IgniteFutureTimeoutCheckedException e) {
+        }
+        catch (IgniteFutureTimeoutCheckedException e) {
             fail(X.getFullStackTrace(e));
         }
 

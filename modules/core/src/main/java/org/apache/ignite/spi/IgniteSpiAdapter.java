@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import javax.management.JMException;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
@@ -42,7 +43,6 @@ import org.apache.ignite.internal.managers.communication.GridMessageListener;
 import org.apache.ignite.internal.managers.eventstorage.GridLocalEventListener;
 import org.apache.ignite.internal.processors.timeout.GridSpiTimeoutObject;
 import org.apache.ignite.internal.util.IgniteExceptionRegistry;
-import org.apache.ignite.internal.util.typedef.F;
 import org.apache.ignite.internal.util.typedef.internal.SB;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteBiPredicate;
@@ -214,7 +214,7 @@ public abstract class IgniteSpiAdapter implements IgniteSpi {
                 }
             }, EVT_NODE_JOINED);
 
-            final Collection<ClusterNode> remotes = F.concat(false, spiCtx.remoteNodes(), spiCtx.remoteDaemonNodes());
+            final Collection<ClusterNode> remotes = spiCtx.remoteNodes();
 
             for (ClusterNode node : remotes) {
                 checkConfigurationConsistency(spiCtx, node, true);
@@ -755,6 +755,10 @@ public abstract class IgniteSpiAdapter implements IgniteSpi {
 
             if (msgFactory0 == null) {
                 msgFactory0 = new MessageFactory() {
+                    @Override public void register(short directType, Supplier<Message> supplier) throws IgniteException {
+                        throw new IgniteException("Failed to register message, node is not started.");
+                    }
+
                     @Nullable @Override public Message create(short type) {
                         throw new IgniteException("Failed to read message, node is not started.");
                     }
@@ -850,11 +854,6 @@ public abstract class IgniteSpiAdapter implements IgniteSpi {
         /** {@inheritDoc} */
         @Override public ClusterNode localNode() {
             return locNode;
-        }
-
-        /** {@inheritDoc} */
-        @Override public Collection<ClusterNode> remoteDaemonNodes() {
-            return Collections.emptyList();
         }
 
         /** {@inheritDoc} */

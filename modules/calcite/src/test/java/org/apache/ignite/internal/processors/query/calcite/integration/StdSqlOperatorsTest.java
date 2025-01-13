@@ -19,14 +19,16 @@ package org.apache.ignite.internal.processors.query.calcite.integration;
 
 import java.math.BigDecimal;
 import java.sql.Date;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.time.Period;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.apache.ignite.internal.processors.query.calcite.QueryChecker;
 import org.apache.ignite.internal.processors.query.calcite.sql.fun.IgniteStdSqlOperatorTable;
 import org.apache.ignite.internal.util.typedef.F;
-import org.junit.Ignore;
 import org.junit.Test;
 
 /**
@@ -98,6 +100,15 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
         assertExpression("MAX(val)").returns(1).check();
         assertExpression("ANY_VALUE(val)").returns(1).check();
         assertExpression("COUNT(*) FILTER(WHERE val <> 1)").returns(0L).check();
+        assertExpression("LISTAGG(val, ',') WITHIN GROUP (ORDER BY val DESC)").returns("1").check();
+        assertExpression("GROUP_CONCAT(val, ',' ORDER BY val DESC)").returns("1").check();
+        assertExpression("STRING_AGG(val, ',' ORDER BY val DESC)").returns("1").check();
+        assertExpression("ARRAY_AGG(val ORDER BY val DESC)").returns(Collections.singletonList(1)).check();
+        assertQuery("SELECT ARRAY_CONCAT_AGG(a ORDER BY CARDINALITY(a)) FROM " +
+            "(SELECT 1 as id, ARRAY[3, 4, 5, 6] as a UNION SELECT 1 as id, ARRAY[1, 2] as a) GROUP BY id")
+            .returns((IntStream.range(1, 7).boxed().collect(Collectors.toList()))).check();
+        assertExpression("EVERY(val = 1)").returns(true).check();
+        assertExpression("SOME(val = 1)").returns(true).check();
     }
 
     /** */
@@ -109,6 +120,8 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
         assertExpression("1=1 IS NOT TRUE").returns(false).check();
         assertExpression("1=1 IS FALSE").returns(false).check();
         assertExpression("1=1 IS NOT FALSE").returns(true).check();
+        assertExpression("NULL IS DISTINCT FROM NULL").returns(false).check();
+        assertExpression("NULL IS NOT DISTINCT FROM NULL").returns(true).check();
     }
 
     /** */
@@ -179,19 +192,23 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
         assertExpression("EXP(2)").returns(Math.exp(2)).check();
         assertExpression("POWER(2, 2)").returns(Math.pow(2, 2)).check();
         assertExpression("LN(2)").returns(Math.log(2)).check();
-        assertExpression("LOG10(2) ").returns(Math.log10(2)).check();
+        assertExpression("LOG10(2)").returns(Math.log(2) / Math.log(10)).check();
         assertExpression("ABS(-1)").returns(Math.abs(-1)).check();
         assertExpression("RAND()").check();
         assertExpression("RAND_INTEGER(10)").check();
         assertExpression("ACOS(1)").returns(Math.acos(1)).check();
+        assertExpression("ACOSH(1)").returns(0d).check();
         assertExpression("ASIN(1)").returns(Math.asin(1)).check();
+        assertExpression("ASINH(0)").returns(0d).check();
         assertExpression("ATAN(1)").returns(Math.atan(1)).check();
+        assertExpression("ATANH(0)").returns(0d).check();
         assertExpression("ATAN2(1, 1)").returns(Math.atan2(1, 1)).check();
         assertExpression("SQRT(4)").returns(Math.sqrt(4)).check();
         assertExpression("CBRT(8)").returns(Math.cbrt(8)).check();
         assertExpression("COS(1)").returns(Math.cos(1)).check();
         assertExpression("COSH(1)").returns(Math.cosh(1)).check();
         assertExpression("COT(1)").returns(1.0d / Math.tan(1)).check();
+        assertExpression("COTH(1)").returns(1.0d / Math.tanh(1)).check();
         assertExpression("DEGREES(1)").returns(Math.toDegrees(1)).check();
         assertExpression("RADIANS(1)").returns(Math.toRadians(1)).check();
         assertExpression("ROUND(1.7)").returns(BigDecimal.valueOf(2)).check();
@@ -200,6 +217,10 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
         assertExpression("SINH(1)").returns(Math.sinh(1)).check();
         assertExpression("TAN(1)").returns(Math.tan(1)).check();
         assertExpression("TANH(1)").returns(Math.tanh(1)).check();
+        assertExpression("SEC(1)").returns(1d / Math.cos(1)).check();
+        assertExpression("SECH(1)").returns(1d / Math.cosh(1)).check();
+        assertExpression("CSC(1)").returns(1d / Math.sin(1)).check();
+        assertExpression("CSCH(1)").returns(1d / Math.sinh(1)).check();
         assertExpression("TRUNCATE(1.7)").returns(BigDecimal.valueOf(1)).check();
         assertExpression("PI").returns(Math.PI).check();
     }
@@ -236,6 +257,11 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
         assertExpression("UNIX_DATE(DATE '2021-01-01')").returns(18628).check();
         assertExpression("DATE_FROM_UNIX_DATE(18628)").returns(Date.valueOf("2021-01-01")).check();
         assertExpression("DATE('2021-01-01')").returns(Date.valueOf("2021-01-01")).check();
+        assertExpression("TIME(1, 10, 30)").returns(Time.valueOf("01:10:30")).check();
+        assertExpression("DATETIME(2021, 1, 1, 1, 10, 30)").returns(Timestamp.valueOf("2021-01-01 01:10:30")).check();
+        assertExpression("TO_CHAR(DATE '2021-01-01', 'YYMMDD')").returns("210101").check();
+        assertExpression("TO_DATE('210101', 'YYMMDD')").returns(Date.valueOf("2021-01-01")).check();
+        assertExpression("TO_TIMESTAMP('210101-01-10-30', 'YYMMDD-HH24-MI-SS')").returns(Timestamp.valueOf("2021-01-01 01:10:30")).check();
     }
 
     /** */
@@ -251,20 +277,14 @@ public class StdSqlOperatorsTest extends AbstractBasicIntegrationTest {
     /** */
     @Test
     public void testCollections() {
+        assertExpression("MAP(SELECT 'a', 1)").returns(F.asMap("a", 1)).check();
+        assertExpression("ARRAY(SELECT 1)").returns(Collections.singletonList(1)).check();
         assertExpression("MAP['a', 1, 'A', 2]").returns(F.asMap("a", 1, "A", 2)).check();
         assertExpression("ARRAY[1, 2, 3]").returns(Arrays.asList(1, 2, 3)).check();
         assertExpression("ARRAY[1, 2, 3][2]").returns(2).check();
         assertExpression("CARDINALITY(ARRAY[1, 2, 3])").returns(3).check();
         assertExpression("ARRAY[1, 2, 3] IS EMPTY").returns(false).check();
         assertExpression("ARRAY[1, 2, 3] IS NOT EMPTY").returns(true).check();
-    }
-
-    /** */
-    @Test
-    @Ignore("https://issues.apache.org/jira/browse/IGNITE-15550")
-    public void testQueryAsCollections() {
-        assertExpression("MAP(SELECT 'a', 1)").returns(F.asMap("a", 1)).check();
-        assertExpression("ARRAY(SELECT 1)").returns(Collections.singletonList(1)).check();
     }
 
     /** */

@@ -78,6 +78,24 @@ public class SqlAnalyzeCommand extends SqlStatisticsCommands {
         }
     }
 
+    /** */
+    public SqlAnalyzeCommand() {
+        // No-op;
+    }
+
+    /** */
+    public SqlAnalyzeCommand(Collection<StatisticsTarget> targets) {
+        this(targets, null);
+    }
+
+    /** */
+    public SqlAnalyzeCommand(Collection<StatisticsTarget> targets, Map<String, String> params) {
+        this.targets = new ArrayList<>(targets);
+
+        for (StatisticsTarget tgt: targets)
+            configs.add(buildConfig(tgt, params));
+    }
+
     /**
      * Build statistics object configuration from command arguments.
      *
@@ -153,8 +171,8 @@ public class SqlAnalyzeCommand extends SqlStatisticsCommands {
         if (map == null)
             return dfltVal;
 
-        String value = map.remove(key);
-        return (value == null) ? dfltVal : Byte.valueOf(value);
+        String val = map.remove(key);
+        return (val == null) ? dfltVal : Byte.valueOf(val);
     }
 
     /**

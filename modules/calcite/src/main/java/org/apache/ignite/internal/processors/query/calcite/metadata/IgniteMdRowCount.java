@@ -22,6 +22,7 @@ import org.apache.calcite.rel.core.Join;
 import org.apache.calcite.rel.core.JoinInfo;
 import org.apache.calcite.rel.core.JoinRelType;
 import org.apache.calcite.rel.core.Minus;
+import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rel.metadata.ReflectiveRelMetadataProvider;
 import org.apache.calcite.rel.metadata.RelMdRowCount;
 import org.apache.calcite.rel.metadata.RelMdUtil;
@@ -50,6 +51,11 @@ public class IgniteMdRowCount extends RelMdRowCount {
 
     /** {@inheritDoc} */
     @Override public Double getRowCount(Join rel, RelMetadataQuery mq) {
+        return rel.estimateRowCount(mq);
+    }
+
+    /** {@inheritDoc} */
+    @Override public Double getRowCount(Sort rel, RelMetadataQuery mq) {
         return rel.estimateRowCount(mq);
     }
 
@@ -97,18 +103,18 @@ public class IgniteMdRowCount extends RelMdRowCount {
         double leftCardinality = leftDistinct / left;
         double rightCardinality = rightDistinct / right;
 
-        double rowsCount = (Math.min(left, right) / (leftCardinality * rightCardinality)) * selectivity;
+        double rowsCnt = (Math.min(left, right) / (leftCardinality * rightCardinality)) * selectivity;
 
         JoinRelType type = rel.getJoinType();
 
         if (type == JoinRelType.LEFT)
-            rowsCount += left;
+            rowsCnt += left;
         else if (type == JoinRelType.RIGHT)
-            rowsCount += right;
+            rowsCnt += right;
         else if (type == JoinRelType.FULL)
-            rowsCount += left + right;
+            rowsCnt += left + right;
 
-        return rowsCount;
+        return rowsCnt;
     }
 
     /**

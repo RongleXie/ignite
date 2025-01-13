@@ -1178,6 +1178,36 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
         }
     }
 
+    /** */
+    @Test
+    public void emptyObjectBuilder() throws IgniteCheckedException {
+        BinaryObject emptyBinObj = builder("test_type").build();
+
+        BinaryObjectBuilder bob2 = emptyBinObj.toBuilder();
+
+        // Check any field is null at the empty object.
+        assertNull(bob2.getField("a"));
+
+        // Modify empty object: add field.
+        BinaryObjectImpl o1 = (BinaryObjectImpl)bob2.setField("a", 1).build();
+        BinaryObjectImpl o2 = (BinaryObjectImpl)builder("test_type").setField("a", 1).build();
+
+        // Check that modified empty object and the new object with the sanme field are equals.
+        assertEquals(o1.schemaId(), o2.schemaId());
+        assertEquals(o1, o2);
+    }
+
+    /** */
+    @Test
+    public void emptyObjectBinarylizable() throws IgniteCheckedException {
+        BinaryMarshaller m = binaryMarshaller();
+
+        BinaryObjectBuilder bob = marshal(new ObjectRaw(), m).toBuilder();
+
+        // Check any field is null at the empty object.
+        assertNull(bob.getField("a"));
+    }
+
     /**
      *
      */
@@ -1511,8 +1541,8 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
      */
     @Test
     public void testSimpleNameLowerCaseMappers() throws Exception {
-        BinaryTypeConfiguration innerClassType = new BinaryTypeConfiguration(InnerMappedObject.class.getName());
-        BinaryTypeConfiguration publicClassType = new BinaryTypeConfiguration(TestMappedObject.class.getName());
+        BinaryTypeConfiguration innerClsType = new BinaryTypeConfiguration(InnerMappedObject.class.getName());
+        BinaryTypeConfiguration publicClsType = new BinaryTypeConfiguration(TestMappedObject.class.getName());
         BinaryTypeConfiguration typeWithCustomMapper = new BinaryTypeConfiguration(CustomMappedObject2.class.getName());
 
         typeWithCustomMapper.setIdMapper(new BinaryIdMapper() {
@@ -1535,7 +1565,7 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
         });
 
         BinaryMarshaller marsh = binaryMarshaller(new BinaryBasicNameMapper(true), new BinaryBasicIdMapper(true),
-            Arrays.asList(innerClassType, publicClassType, typeWithCustomMapper));
+            Arrays.asList(innerClsType, publicClsType, typeWithCustomMapper));
 
         InnerMappedObject innerObj = new InnerMappedObject(10, "str1");
 
@@ -3446,15 +3476,15 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
         BinaryMarshaller m1 = binaryMarshaller();
 
         Value obj = new Value(27);
-        ObjectWithRaw objectWithRaw = new ObjectWithRaw(27, 13);
-        ObjectRaw objectRaw = new ObjectRaw(27, 13);
+        ObjectWithRaw objWithRaw = new ObjectWithRaw(27, 13);
+        ObjectRaw objRaw = new ObjectRaw(27, 13);
 
         Value objOther = new Value(26);
-        ObjectWithRaw objectWithRawOther = new ObjectWithRaw(26, 13);
-        ObjectRaw objectRawOther = new ObjectRaw(26, 13);
+        ObjectWithRaw objWithRawOther = new ObjectWithRaw(26, 13);
+        ObjectRaw objRawOther = new ObjectRaw(26, 13);
 
         ArrayList collection = new ArrayList(Arrays.asList(
-            obj, objectWithRawOther, objectRaw, objectWithRaw, objectRawOther, objOther));
+            obj, objWithRawOther, objRaw, objWithRaw, objRawOther, objOther));
 
         marshalUnmarshal(collection, m0);
         marshalUnmarshal(collection, m1);
@@ -3474,19 +3504,19 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
         BinaryMarshaller m1 = binaryMarshaller();
 
         Value obj = new Value(27);
-        ObjectWithRaw objectWithRaw = new ObjectWithRaw(27, 13);
-        ObjectRaw objectRaw = new ObjectRaw(27, 13);
+        ObjectWithRaw objWithRaw = new ObjectWithRaw(27, 13);
+        ObjectRaw objRaw = new ObjectRaw(27, 13);
 
         Value objOther = new Value(26);
-        ObjectWithRaw objectWithRawOther = new ObjectWithRaw(26, 13);
-        ObjectRaw objectRawOther = new ObjectRaw(26, 13);
+        ObjectWithRaw objWithRawOther = new ObjectWithRaw(26, 13);
+        ObjectRaw objRawOther = new ObjectRaw(26, 13);
 
         BinaryObjectImpl binObj0 = marshal(obj, m0);
         BinaryObjectImpl binObj1 = marshal(obj, m1);
-        BinaryObjectImpl binObjWithRaw0 = marshal(objectWithRaw, m0);
-        BinaryObjectImpl binObjWithRaw1 = marshal(objectWithRaw, m1);
-        BinaryObjectImpl binObjRaw0 = marshal(objectRaw, m0);
-        BinaryObjectImpl binObjRaw1 = marshal(objectRaw, m1);
+        BinaryObjectImpl binObjWithRaw0 = marshal(objWithRaw, m0);
+        BinaryObjectImpl binObjWithRaw1 = marshal(objWithRaw, m1);
+        BinaryObjectImpl binObjRaw0 = marshal(objRaw, m0);
+        BinaryObjectImpl binObjRaw1 = marshal(objRaw, m1);
 
         assertNotEquals(binObj0.array().length, binObj1.array().length);
         assertNotEquals(binObjWithRaw0.array().length, binObjWithRaw1.array().length);
@@ -3507,10 +3537,10 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
 
         BinaryObjectImpl binObjOther0 = marshal(objOther, m0);
         BinaryObjectImpl binObjOther1 = marshal(objOther, m1);
-        BinaryObjectImpl binObjWithRawOther0 = marshal(objectWithRawOther, m0);
-        BinaryObjectImpl binObjWithRawOther1 = marshal(objectWithRawOther, m1);
-        BinaryObjectImpl binObjRawOther0 = marshal(objectRawOther, m0);
-        BinaryObjectImpl binObjRawOther1 = marshal(objectRawOther, m1);
+        BinaryObjectImpl binObjWithRawOther0 = marshal(objWithRawOther, m0);
+        BinaryObjectImpl binObjWithRawOther1 = marshal(objWithRawOther, m1);
+        BinaryObjectImpl binObjRawOther0 = marshal(objRawOther, m0);
+        BinaryObjectImpl binObjRawOther1 = marshal(objRawOther, m1);
 
         assertEquals(binObjOther0.length(), binObj0.length());
         assertEquals(binObjOther1.length(), binObj1.length());
@@ -4153,6 +4183,66 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
         marsh.setBinaryContext(ctx, iCfg);
 
         return marsh;
+    }
+
+    /**
+     * @return Binary object builder.
+     */
+    protected BinaryObjectBuilder builder(
+        String typeName
+    ) throws IgniteCheckedException {
+        return builder(typeName, null, null, null, null, null);
+    }
+
+    /**
+     * @return Binary object builder.
+     */
+    protected BinaryObjectBuilder builder(
+        String typeName,
+        BinaryNameMapper nameMapper,
+        BinaryIdMapper mapper,
+        BinarySerializer serializer,
+        Collection<BinaryTypeConfiguration> cfgs,
+        Collection<String> excludedClasses
+    ) throws IgniteCheckedException {
+        IgniteConfiguration iCfg = new IgniteConfiguration();
+
+        BinaryConfiguration bCfg = new BinaryConfiguration();
+
+        bCfg.setNameMapper(nameMapper);
+        bCfg.setIdMapper(mapper);
+        bCfg.setSerializer(serializer);
+        bCfg.setCompactFooter(compactFooter());
+
+        bCfg.setTypeConfigurations(cfgs);
+
+        iCfg.setBinaryConfiguration(bCfg);
+        iCfg.setClientMode(false);
+        iCfg.setDiscoverySpi(new TcpDiscoverySpi() {
+            @Override public void sendCustomEvent(DiscoverySpiCustomMessage msg) throws IgniteException {
+                //No-op.
+            }
+        });
+        iCfg.setSystemViewExporterSpi(new JmxSystemViewExporterSpi());
+
+        BinaryContext ctx = new BinaryContext(BinaryCachingMetadataHandler.create(), iCfg, new NullLogger());
+
+        BinaryMarshaller marsh = new BinaryMarshaller();
+
+        MarshallerContextTestImpl marshCtx = new MarshallerContextTestImpl(null, excludedClasses);
+
+        GridTestKernalContext kernCtx = new GridTestKernalContext(log, iCfg);
+
+        kernCtx.add(new GridSystemViewManager(kernCtx));
+        kernCtx.add(new GridDiscoveryManager(kernCtx));
+
+        marshCtx.onMarshallerProcessorStarted(kernCtx, null);
+
+        marsh.setContext(marshCtx);
+
+        marsh.setBinaryContext(ctx, iCfg);
+
+        return new BinaryObjectBuilderImpl(ctx, typeName);
     }
 
     /**
@@ -5428,9 +5518,9 @@ public class BinaryMarshallerSelfTest extends AbstractBinaryArraysTest {
             if (!(o instanceof Value))
                 return false;
 
-            Value value = (Value)o;
+            Value val = (Value)o;
 
-            return val == value.val;
+            return this.val == val.val;
         }
 
         /** {@inheritDoc} */

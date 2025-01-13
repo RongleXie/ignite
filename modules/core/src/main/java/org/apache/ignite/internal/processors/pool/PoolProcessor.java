@@ -38,13 +38,9 @@ import org.apache.ignite.failure.FailureContext;
 import org.apache.ignite.failure.FailureType;
 import org.apache.ignite.internal.GridKernalContext;
 import org.apache.ignite.internal.IgniteComponentType;
-import org.apache.ignite.internal.StripedExecutorMXBeanAdapter;
-import org.apache.ignite.internal.ThreadPoolMXBeanAdapter;
-import org.apache.ignite.internal.managers.IgniteMBeansManager;
 import org.apache.ignite.internal.managers.communication.GridIoPolicy;
 import org.apache.ignite.internal.managers.systemview.walker.StripedExecutorTaskViewWalker;
 import org.apache.ignite.internal.processors.GridProcessorAdapter;
-import org.apache.ignite.internal.processors.metric.MetricRegistry;
 import org.apache.ignite.internal.processors.plugin.IgnitePluginProcessor;
 import org.apache.ignite.internal.processors.security.IgniteSecurity;
 import org.apache.ignite.internal.processors.security.thread.SecurityAwareIoPool;
@@ -59,8 +55,7 @@ import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.internal.util.worker.GridWorkerListener;
 import org.apache.ignite.internal.worker.WorkersRegistry;
 import org.apache.ignite.lang.IgniteInClosure;
-import org.apache.ignite.mxbean.StripedExecutorMXBean;
-import org.apache.ignite.mxbean.ThreadPoolMXBean;
+import org.apache.ignite.metric.MetricRegistry;
 import org.apache.ignite.plugin.extensions.communication.IoPool;
 import org.apache.ignite.spi.systemview.view.StripedExecutorTaskView;
 import org.apache.ignite.thread.IgniteStripedThreadPoolExecutor;
@@ -142,7 +137,7 @@ public class PoolProcessor extends GridProcessorAdapter {
     public static final String THREAD_POOLS = "threadPools";
 
     /** Histogram buckets for the task execution time metric (in milliseconds). */
-    public static final long[] TASK_EXEC_TIME_HISTOGRAM_BUCKETS = new long[] {100, 1000, 10000, 30000, 60000};
+    public static final long[] TASK_EXEC_TIME_HISTOGRAM_BUCKETS = new long[] {10, 50, 100, 500, 1000};
 
     /** Executor service. */
     @GridToStringExclude
@@ -460,7 +455,9 @@ public class PoolProcessor extends GridProcessorAdapter {
                 GridIoPolicy.IDX_POOL,
                 oomeHnd
             );
+        }
 
+        if (IgniteComponentType.INDEXING.inClassPath() || IgniteComponentType.QUERY_ENGINE.inClassPath()) {
             int buildIdxThreadPoolSize = cfg.getBuildIndexThreadPoolSize();
 
             validateThreadPoolSize(buildIdxThreadPoolSize, "build-idx");
@@ -519,19 +516,19 @@ public class PoolProcessor extends GridProcessorAdapter {
 
         rebalanceExecSvc.allowCoreThreadTimeOut(true);
 
+        snpExecSvc = createExecutorService(
+            SNAPSHOT_RUNNER_THREAD_PREFIX,
+            cfg.getIgniteInstanceName(),
+            cfg.getSnapshotThreadPoolSize(),
+            cfg.getSnapshotThreadPoolSize(),
+            DFLT_THREAD_KEEP_ALIVE_TIME,
+            new LinkedBlockingQueue<>(),
+            GridIoPolicy.UNDEFINED,
+            oomeHnd);
+
+        snpExecSvc.allowCoreThreadTimeOut(true);
+
         if (CU.isPersistenceEnabled(ctx.config())) {
-            snpExecSvc = createExecutorService(
-                SNAPSHOT_RUNNER_THREAD_PREFIX,
-                cfg.getIgniteInstanceName(),
-                cfg.getSnapshotThreadPoolSize(),
-                cfg.getSnapshotThreadPoolSize(),
-                DFLT_THREAD_KEEP_ALIVE_TIME,
-                new LinkedBlockingQueue<>(),
-                GridIoPolicy.UNDEFINED,
-                excHnd);
-
-            snpExecSvc.allowCoreThreadTimeOut(true);
-
             reencryptExecSvc = createExecutorService(
                 "reencrypt",
                 ctx.igniteInstanceName(),
@@ -939,73 +936,6 @@ public class PoolProcessor extends GridProcessorAdapter {
         }
 
         ((MetricsAwareExecutorService)execSvc).registerMetrics(ctx.metric().registry(metricName(THREAD_POOLS, name)));
-    }
-
-    /**
-     * Register thread pool JMX beans.
-     *
-     * @param mbMgr Ignite MXBean manager.
-     * @throws IgniteCheckedException On bean registration error.
-     */
-    public void registerMxBeans(IgniteMBeansManager mbMgr) throws IgniteCheckedException {
-        registerExecutorMBean(mbMgr, "GridUtilityCacheExecutor", utilityCacheExecSvc);
-        registerExecutorMBean(mbMgr, "GridExecutionExecutor", execSvc);
-        registerExecutorMBean(mbMgr, "GridServicesExecutor", svcExecSvc);
-        registerExecutorMBean(mbMgr, "GridSystemExecutor", sysExecSvc);
-        registerExecutorMBean(mbMgr, "GridClassLoadingExecutor", p2pExecSvc);
-        registerExecutorMBean(mbMgr, "GridManagementExecutor", mgmtExecSvc);
-        registerExecutorMBean(mbMgr, "GridAffinityExecutor", affExecSvc);
-        registerExecutorMBean(mbMgr, "GridCallbackExecutor", callbackExecSvc);
-        registerExecutorMBean(mbMgr, "GridQueryExecutor", qryExecSvc);
-        registerExecutorMBean(mbMgr, "GridSchemaExecutor", schemaExecSvc);
-        registerExecutorMBean(mbMgr, "GridRebalanceExecutor", rebalanceExecSvc);
-        registerExecutorMBean(mbMgr, "GridRebalanceStripedExecutor", rebalanceStripedExecSvc);
-
-        registerStripedExecutorMBean(mbMgr, "GridDataStreamExecutor", dataStreamerExecSvc);
-
-        if (idxExecSvc != null)
-            registerExecutorMBean(mbMgr, "GridIndexingExecutor", idxExecSvc);
-
-        if (ctx.config().getConnectorConfiguration() != null)
-            registerExecutorMBean(mbMgr, "GridRestExecutor", restExecSvc);
-
-        if (stripedExecSvc != null) {
-            // striped executor uses a custom adapter
-            registerStripedExecutorMBean(mbMgr, "StripedExecutor", stripedExecSvc);
-        }
-
-        if (snpExecSvc != null)
-            registerExecutorMBean(mbMgr, "GridSnapshotExecutor", snpExecSvc);
-
-        if (thinClientExec != null)
-            registerExecutorMBean(mbMgr, "GridThinClientExecutor", thinClientExec);
-
-        if (customExecs != null) {
-            for (Map.Entry<String, ? extends ExecutorService> entry : customExecs.entrySet())
-                registerExecutorMBean(mbMgr, entry.getKey(), entry.getValue());
-        }
-    }
-
-    /**
-     * Registers a {@link ThreadPoolMXBean} for an executor.
-     *
-     * @param name Mame of the bean to register.
-     * @param exec Executor to register a bean for.
-     * @throws IgniteCheckedException if registration fails.
-     */
-    private void registerExecutorMBean(IgniteMBeansManager mgr, String name, ExecutorService exec) throws IgniteCheckedException {
-        mgr.registerMBean("Thread Pools", name, new ThreadPoolMXBeanAdapter(exec), ThreadPoolMXBean.class);
-    }
-
-    /**
-     * Registers a {@link StripedExecutorMXBean} for an striped executor.
-     *
-     * @param name Mame of the bean to register.
-     * @param exec Executor to register a bean for.
-     * @throws IgniteCheckedException if registration fails.
-     */
-    private void registerStripedExecutorMBean(IgniteMBeansManager mgr, String name, StripedExecutor exec) throws IgniteCheckedException {
-        mgr.registerMBean("Thread Pools", name, new StripedExecutorMXBeanAdapter(exec), StripedExecutorMXBean.class);
     }
 
     /**

@@ -24,9 +24,11 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.UUID;
 import org.apache.ignite.IgniteCheckedException;
 import org.apache.ignite.IgniteLogger;
@@ -35,16 +37,19 @@ import org.apache.ignite.internal.managers.encryption.GroupKey;
 import org.apache.ignite.internal.managers.encryption.GroupKeyEncrypted;
 import org.apache.ignite.internal.pagemem.FullPageId;
 import org.apache.ignite.internal.pagemem.wal.record.CacheState;
+import org.apache.ignite.internal.pagemem.wal.record.CdcManagerRecord;
+import org.apache.ignite.internal.pagemem.wal.record.CdcManagerStopRecord;
 import org.apache.ignite.internal.pagemem.wal.record.CheckpointRecord;
 import org.apache.ignite.internal.pagemem.wal.record.DataEntry;
 import org.apache.ignite.internal.pagemem.wal.record.DataRecord;
 import org.apache.ignite.internal.pagemem.wal.record.EncryptedRecord;
+import org.apache.ignite.internal.pagemem.wal.record.IncrementalSnapshotFinishRecord;
+import org.apache.ignite.internal.pagemem.wal.record.IncrementalSnapshotStartRecord;
 import org.apache.ignite.internal.pagemem.wal.record.IndexRenameRootPageRecord;
 import org.apache.ignite.internal.pagemem.wal.record.LazyDataEntry;
 import org.apache.ignite.internal.pagemem.wal.record.MasterKeyChangeRecordV2;
 import org.apache.ignite.internal.pagemem.wal.record.MemoryRecoveryRecord;
 import org.apache.ignite.internal.pagemem.wal.record.MetastoreDataRecord;
-import org.apache.ignite.internal.pagemem.wal.record.MvccDataEntry;
 import org.apache.ignite.internal.pagemem.wal.record.PageSnapshot;
 import org.apache.ignite.internal.pagemem.wal.record.PartitionClearingStartRecord;
 import org.apache.ignite.internal.pagemem.wal.record.ReencryptionStartRecord;
@@ -52,11 +57,9 @@ import org.apache.ignite.internal.pagemem.wal.record.TxRecord;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecord;
 import org.apache.ignite.internal.pagemem.wal.record.WALRecord.RecordType;
 import org.apache.ignite.internal.pagemem.wal.record.WalRecordCacheGroupAware;
+import org.apache.ignite.internal.pagemem.wal.record.delta.ClusterSnapshotRecord;
 import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageInsertFragmentRecord;
 import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageInsertRecord;
-import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageMvccMarkUpdatedRecord;
-import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageMvccUpdateNewTxStateHintRecord;
-import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageMvccUpdateTxStateHintRecord;
 import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageRemoveRecord;
 import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageSetFreeListPageRecord;
 import org.apache.ignite.internal.pagemem.wal.record.delta.DataPageUpdateRecord;
@@ -109,13 +112,11 @@ import org.apache.ignite.internal.processors.cache.persistence.tree.io.BPlusIO;
 import org.apache.ignite.internal.processors.cache.persistence.tree.io.BPlusInnerIO;
 import org.apache.ignite.internal.processors.cache.persistence.tree.io.CacheVersionIO;
 import org.apache.ignite.internal.processors.cache.persistence.wal.ByteBufferBackedDataInput;
-import org.apache.ignite.internal.processors.cache.persistence.wal.ByteBufferBackedDataInputImpl;
 import org.apache.ignite.internal.processors.cache.persistence.wal.WALPointer;
 import org.apache.ignite.internal.processors.cache.persistence.wal.record.HeaderRecord;
 import org.apache.ignite.internal.processors.cache.version.GridCacheVersion;
 import org.apache.ignite.internal.processors.cacheobject.IgniteCacheObjectProcessor;
 import org.apache.ignite.internal.util.typedef.T2;
-import org.apache.ignite.internal.util.typedef.T3;
 import org.apache.ignite.internal.util.typedef.internal.CU;
 import org.apache.ignite.internal.util.typedef.internal.U;
 import org.apache.ignite.lang.IgniteProductVersion;
@@ -123,6 +124,7 @@ import org.apache.ignite.spi.encryption.EncryptionSpi;
 import org.apache.ignite.spi.encryption.noop.NoopEncryptionSpi;
 import org.jetbrains.annotations.Nullable;
 
+import static org.apache.ignite.internal.pagemem.wal.record.WALRecord.RecordType.CDC_DATA_RECORD;
 import static org.apache.ignite.internal.pagemem.wal.record.WALRecord.RecordType.DATA_RECORD;
 import static org.apache.ignite.internal.pagemem.wal.record.WALRecord.RecordType.DATA_RECORD_V2;
 import static org.apache.ignite.internal.pagemem.wal.record.WALRecord.RecordType.ENCRYPTED_DATA_RECORD_V2;
@@ -210,22 +212,15 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
     @Override public WALRecord readRecord(RecordType type, ByteBufferBackedDataInput in, int size)
         throws IOException, IgniteCheckedException {
         if (type == ENCRYPTED_RECORD || type == ENCRYPTED_RECORD_V2) {
-            if (encSpi == null) {
-                T2<Integer, RecordType> knownData = skipEncryptedRecord(in, true);
+            DecryptionResult decryptionResult = readEncryptedData(in, true, type == ENCRYPTED_RECORD_V2);
 
-                //This happen on offline WAL iteration(we don't have encryption keys available).
-                return new EncryptedRecord(knownData.get1(), knownData.get2());
+            if (decryptionResult.isDecryptedSuccessfully()) {
+                ByteBufferBackedDataInput data = decryptionResult.decryptedData();
+
+                return readPlainRecord(decryptionResult.recordType(), data, true, data.buffer().capacity());
             }
-
-            T3<ByteBufferBackedDataInput, Integer, RecordType> clData =
-                readEncryptedData(in, true, type == ENCRYPTED_RECORD_V2);
-
-            //This happen during startup. On first WAL iteration we restore only metastore.
-            //So, no encryption keys available. See GridCacheDatabaseSharedManager#readMetastore
-            if (clData.get1() == null)
-                return new EncryptedRecord(clData.get2(), clData.get3());
-
-            return readPlainRecord(clData.get3(), clData.get1(), true, clData.get1().buffer().capacity());
+            else
+                return new EncryptedRecord(decryptionResult.grpId(), decryptionResult.recordType());
         }
 
         return readPlainRecord(type, in, false, size);
@@ -287,7 +282,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
      * @throws IOException If failed.
      * @throws IgniteCheckedException If failed.
      */
-    private T3<ByteBufferBackedDataInput, Integer, RecordType> readEncryptedData(
+    private DecryptionResult readEncryptedData(
         ByteBufferBackedDataInput in,
         boolean readType,
         boolean readKeyId
@@ -295,49 +290,37 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
         int grpId = in.readInt();
         int encRecSz = in.readInt();
 
-        RecordType plainRecType = null;
-
-        if (readType)
-            plainRecType = RecordV1Serializer.readRecordType(in);
+        RecordType plainRecType = readType ? RecordV1Serializer.readRecordType(in) : null;
 
         int keyId = readKeyId ? in.readUnsignedByte() : GridEncryptionManager.INITIAL_KEY_ID;
+
+        // Encryption Manager can be null during offline WAL iteration
+        if (encMgr == null || encSpi == null) {
+            int skipped = in.skipBytes(encRecSz);
+
+            assert skipped == encRecSz;
+
+            return new DecryptionResult(null, plainRecType, grpId);
+        }
+
+        GroupKey grpKey = encMgr.groupKey(grpId, keyId);
+
+        // Encryption key is not available when restoring the MetaStorage
+        if (grpKey == null) {
+            int skipped = in.skipBytes(encRecSz);
+
+            assert skipped == encRecSz;
+
+            return new DecryptionResult(null, plainRecType, grpId);
+        }
 
         byte[] encData = new byte[encRecSz];
 
         in.readFully(encData);
 
-        GroupKey grpKey = encMgr.groupKey(grpId, keyId);
-
-        if (grpKey == null)
-            return new T3<>(null, grpId, plainRecType);
-
         byte[] clData = encSpi.decrypt(encData, grpKey.key());
 
-        return new T3<>(new ByteBufferBackedDataInputImpl().buffer(ByteBuffer.wrap(clData)), grpId, plainRecType);
-    }
-
-    /**
-     * Reads encrypted record without decryption.
-     * Should be used only for a offline WAL iteration.
-     *
-     * @param in Data stream.
-     * @param readType If {@code true} plain record type will be read from {@code in}.
-     * @return Group id and type of skipped record.
-     */
-    private T2<Integer, RecordType> skipEncryptedRecord(ByteBufferBackedDataInput in, boolean readType)
-        throws IOException, IgniteCheckedException {
-        int grpId = in.readInt();
-        int encRecSz = in.readInt();
-        RecordType plainRecType = null;
-
-        if (readType)
-            plainRecType = RecordV1Serializer.readRecordType(in);
-
-        int skipped = in.skipBytes(encRecSz);
-
-        assert skipped == encRecSz;
-
-        return new T2<>(grpId, plainRecType);
+        return new DecryptionResult(ByteBuffer.wrap(clData), plainRecType, grpId);
     }
 
     /**
@@ -447,15 +430,6 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
             case DATA_PAGE_SET_FREE_LIST_PAGE:
                 return 4 + 8 + 8;
 
-            case MVCC_DATA_PAGE_MARK_UPDATED_RECORD:
-                return 4 + 8 + 4 + 8 + 8 + 4;
-
-            case MVCC_DATA_PAGE_TX_STATE_HINT_UPDATED_RECORD:
-                return 4 + 8 + 4 + 1;
-
-            case MVCC_DATA_PAGE_NEW_TX_STATE_HINT_UPDATED_RECORD:
-                return 4 + 8 + 4 + 1;
-
             case INIT_NEW_PAGE_RECORD:
                 return 4 + 8 + 2 + 2 + 8;
 
@@ -556,6 +530,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 return 4 + 8 + 1;
 
             case SWITCH_SEGMENT_RECORD:
+            case CDC_MANAGER_STOP_RECORD:
                 return 0;
 
             case TX_RECORD:
@@ -572,6 +547,18 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
 
             case PARTITION_CLEARING_START_RECORD:
                 return 4 + 4 + 8;
+
+            case CLUSTER_SNAPSHOT:
+                return 4 + ((ClusterSnapshotRecord)record).clusterSnapshotName().getBytes().length;
+
+            case INCREMENTAL_SNAPSHOT_START_RECORD:
+                return 16;
+
+            case INCREMENTAL_SNAPSHOT_FINISH_RECORD:
+                return ((IncrementalSnapshotFinishRecord)record).dataSize();
+
+            case CDC_MANAGER_RECORD:
+                return 8 + 4 + 4 + 4;
 
             default:
                 throw new UnsupportedOperationException("Type: " + record.type());
@@ -818,41 +805,6 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 long freeListPage = in.readLong();
 
                 res = new DataPageSetFreeListPageRecord(cacheId, pageId, freeListPage);
-
-                break;
-
-            case MVCC_DATA_PAGE_MARK_UPDATED_RECORD:
-                cacheId = in.readInt();
-                pageId = in.readLong();
-
-                itemId = in.readInt();
-                long newMvccCrd = in.readLong();
-                long newMvccCntr = in.readLong();
-                int newMvccOpCntr = in.readInt();
-
-                res = new DataPageMvccMarkUpdatedRecord(cacheId, pageId, itemId, newMvccCrd, newMvccCntr, newMvccOpCntr);
-
-                break;
-
-            case MVCC_DATA_PAGE_TX_STATE_HINT_UPDATED_RECORD:
-                cacheId = in.readInt();
-                pageId = in.readLong();
-
-                itemId = in.readInt();
-                byte txState = in.readByte();
-
-                res = new DataPageMvccUpdateTxStateHintRecord(cacheId, pageId, itemId, txState);
-
-                break;
-
-            case MVCC_DATA_PAGE_NEW_TX_STATE_HINT_UPDATED_RECORD:
-                cacheId = in.readInt();
-                pageId = in.readLong();
-
-                itemId = in.readInt();
-                byte newTxState = in.readByte();
-
-                res = new DataPageMvccUpdateNewTxStateHintRecord(cacheId, pageId, itemId, newTxState);
 
                 break;
 
@@ -1225,7 +1177,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
 
                 byte rotatedIdPart = in.readByte();
 
-                res = new RotatedIdPartRecord(cacheId, pageId, rotatedIdPart);
+                res = new RotatedIdPartRecord(cacheId, pageId, Byte.toUnsignedInt(rotatedIdPart));
 
                 break;
 
@@ -1296,6 +1248,52 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 long clearVer = in.readLong();
 
                 res = new PartitionClearingStartRecord(partId0, grpId, clearVer);
+
+                break;
+
+            case CLUSTER_SNAPSHOT:
+                int snpNameLen = in.readInt();
+
+                byte[] snpName = new byte[snpNameLen];
+
+                in.readFully(snpName);
+
+                res = new ClusterSnapshotRecord(new String(snpName));
+
+                break;
+
+            case INCREMENTAL_SNAPSHOT_START_RECORD:
+                long mst = in.readLong();
+                long lst = in.readLong();
+
+                res = new IncrementalSnapshotStartRecord(new UUID(mst, lst));
+
+                break;
+
+            case INCREMENTAL_SNAPSHOT_FINISH_RECORD:
+                long mstSignBits = in.readLong();
+                long lstSignBits = in.readLong();
+
+                Set<GridCacheVersion> included = readVersions(in);
+                Set<GridCacheVersion> excluded = readVersions(in);
+
+                res = new IncrementalSnapshotFinishRecord(new UUID(mstSignBits, lstSignBits), included, excluded);
+
+                break;
+
+            case CDC_MANAGER_RECORD:
+                long walSegIdx = in.readLong();
+                int fileOff = in.readInt();
+                int size = in.readInt();
+
+                int entryIdx = in.readInt();
+
+                res = new CdcManagerRecord(new T2<>(new WALPointer(walSegIdx, fileOff, size), entryIdx));
+
+                break;
+
+            case CDC_MANAGER_STOP_RECORD:
+                res = new CdcManagerStopRecord();
 
                 break;
 
@@ -1481,41 +1479,6 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 buf.putLong(freeListRec.pageId());
 
                 buf.putLong(freeListRec.freeListPage());
-
-                break;
-
-            case MVCC_DATA_PAGE_MARK_UPDATED_RECORD:
-                DataPageMvccMarkUpdatedRecord rmvRec = (DataPageMvccMarkUpdatedRecord)rec;
-
-                buf.putInt(rmvRec.groupId());
-                buf.putLong(rmvRec.pageId());
-
-                buf.putInt(rmvRec.itemId());
-                buf.putLong(rmvRec.newMvccCrd());
-                buf.putLong(rmvRec.newMvccCntr());
-                buf.putInt(rmvRec.newMvccOpCntr());
-
-                break;
-
-            case MVCC_DATA_PAGE_TX_STATE_HINT_UPDATED_RECORD:
-                DataPageMvccUpdateTxStateHintRecord txStRec = (DataPageMvccUpdateTxStateHintRecord)rec;
-
-                buf.putInt(txStRec.groupId());
-                buf.putLong(txStRec.pageId());
-
-                buf.putInt(txStRec.itemId());
-                buf.put(txStRec.txState());
-
-                break;
-
-            case MVCC_DATA_PAGE_NEW_TX_STATE_HINT_UPDATED_RECORD:
-                DataPageMvccUpdateNewTxStateHintRecord newTxStRec = (DataPageMvccUpdateNewTxStateHintRecord)rec;
-
-                buf.putInt(newTxStRec.groupId());
-                buf.putLong(newTxStRec.pageId());
-
-                buf.putInt(newTxStRec.itemId());
-                buf.put(newTxStRec.txState());
 
                 break;
 
@@ -1888,6 +1851,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 break;
 
             case SWITCH_SEGMENT_RECORD:
+            case CDC_MANAGER_STOP_RECORD:
                 break;
 
             case MASTER_KEY_CHANGE_RECORD_V2:
@@ -1941,6 +1905,51 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
                 buf.putInt(partitionClearingStartRecord.groupId());
 
                 buf.putLong(partitionClearingStartRecord.clearVersion());
+
+                break;
+
+            case INCREMENTAL_SNAPSHOT_START_RECORD:
+                IncrementalSnapshotStartRecord startRec = (IncrementalSnapshotStartRecord)rec;
+
+                buf.putLong(startRec.id().getMostSignificantBits());
+                buf.putLong(startRec.id().getLeastSignificantBits());
+
+                break;
+
+            case INCREMENTAL_SNAPSHOT_FINISH_RECORD:
+                IncrementalSnapshotFinishRecord incSnpFinRec = (IncrementalSnapshotFinishRecord)rec;
+
+                buf.putLong(incSnpFinRec.id().getMostSignificantBits());
+                buf.putLong(incSnpFinRec.id().getLeastSignificantBits());
+
+                buf.putInt(incSnpFinRec.included().size());
+
+                for (GridCacheVersion v: incSnpFinRec.included())
+                    putVersion(buf, v, false);
+
+                buf.putInt(incSnpFinRec.excluded().size());
+
+                for (GridCacheVersion v: incSnpFinRec.excluded())
+                    putVersion(buf, v, false);
+
+                break;
+
+            case CLUSTER_SNAPSHOT:
+                byte[] snpName = ((ClusterSnapshotRecord)rec).clusterSnapshotName().getBytes();
+
+                buf.putInt(snpName.length);
+                buf.put(snpName);
+
+                break;
+
+            case CDC_MANAGER_RECORD:
+                T2<WALPointer, Integer> state = ((CdcManagerRecord)rec).walState();
+
+                buf.putLong(state.get1().index());
+                buf.putInt(state.get1().fileOffset());
+                buf.putInt(state.get1().length());
+
+                buf.putInt(state.get2());
 
                 break;
 
@@ -2010,8 +2019,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
         buf.putLong(entry.partitionCounter());
         buf.putLong(entry.expireTime());
 
-        if (!(entry instanceof MvccDataEntry))
-            buf.put(entry.flags());
+        buf.put(entry.flags());
     }
 
     /**
@@ -2069,19 +2077,13 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
         RecordType dataRecordType = recType == ENCRYPTED_DATA_RECORD_V3 ? DATA_RECORD_V2 : DATA_RECORD;
 
         if (needDecryption) {
-            if (encSpi == null) {
-                skipEncryptedRecord(in, false);
+            boolean readKeyId = recType == ENCRYPTED_DATA_RECORD_V2 || recType == ENCRYPTED_DATA_RECORD_V3;
 
-                return new EncryptedDataEntry();
-            }
+            DecryptionResult decryptionResult = readEncryptedData(in, false, readKeyId);
 
-            T3<ByteBufferBackedDataInput, Integer, RecordType> clData = readEncryptedData(in, false,
-                recType == ENCRYPTED_DATA_RECORD_V2 || recType == ENCRYPTED_DATA_RECORD_V3);
-
-            if (clData.get1() == null)
-                return null;
-
-            return readPlainDataEntry(clData.get1(), dataRecordType);
+            return decryptionResult.isDecryptedSuccessfully()
+                ? readPlainDataEntry(decryptionResult.decryptedData(), dataRecordType)
+                : new EncryptedDataEntry();
         }
 
         return readPlainDataEntry(in, dataRecordType);
@@ -2120,7 +2122,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
         int partId = in.readInt();
         long partCntr = in.readLong();
         long expireTime = in.readLong();
-        byte flags = type == DATA_RECORD_V2 ? in.readByte() : (byte)0;
+        byte flags = type == DATA_RECORD_V2 || type == CDC_DATA_RECORD ? in.readByte() : (byte)0;
 
         GridCacheContext cacheCtx = cctx.cacheContext(cacheId);
 
@@ -2259,6 +2261,26 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
     }
 
     /**
+     * Read set of versions.
+     *
+     * @param in Data input to read from.
+     * @return Read set of cache versions.
+     */
+    private Set<GridCacheVersion> readVersions(ByteBufferBackedDataInput in) throws IOException {
+        int txsSize = in.readInt();
+
+        Set<GridCacheVersion> txs = new HashSet<>();
+
+        for (int i = 0; i < txsSize; i++) {
+            GridCacheVersion v = readVersion(in, false);
+
+            txs.add(v);
+        }
+
+        return txs;
+    }
+
+    /**
      * @param dataRec Data record to serialize.
      * @return Full data record size.
      * @throws IgniteCheckedException If failed to obtain the length of one of the entries.
@@ -2306,7 +2328,7 @@ public class RecordDataV1Serializer implements RecordDataSerializer {
             /*part ID*/4 +
             /*expire Time*/8 +
             /*part cnt*/8 +
-            /*primary*/(entry instanceof MvccDataEntry ? 0 : 1);
+            /*flags*/1;
     }
 
     /**
